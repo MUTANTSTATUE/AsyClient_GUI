@@ -1,0 +1,11 @@
+<RCC>
+    <qresource prefix="/">
+        <file>main.qml</file>
+        <file>LoginPage.qml</file>
+        <file>Sidebar.qml</file>
+        <file>TopBar.qml</file>
+        <file>CloudPage.qml</file>
+        <file>TransferPage.qml</file>
+        <file>Utils.js</file>
+    </qresource>
+</RCC>
