@@ -374,3 +374,24 @@ void ClientWrapper::handleProxyConnection()
 
     });
 }
+
+QVariantList ClientWrapper::scanIncompleteDownloads(const QString &dir)
+{
+    QVariantList list;
+    auto tasks = AsyCClient::ScanIncompleteDownloads(dir.toStdString());
+    for (const auto &t : tasks) {
+        QVariantMap map;
+        map["sid"] = -1; // 还没分配 sid
+        map["fileId"] = t.file_id;
+        map["filename"] = QString::fromStdString(t.filename);
+        map["username"] = QString::fromStdString(t.username);
+        map["totalSize"] = (qint64)t.total_size;
+        map["transferred"] = (qint64)t.current_offset;
+        map["localPath"] = QString::fromStdString(t.local_path);
+        map["type"] = "DL";
+        map["status"] = "中断";
+        map["progress"] = t.total_size > 0 ? (double)t.current_offset / t.total_size : 0;
+        list.append(map);
+    }
+    return list;
+}

@@ -57,7 +57,19 @@ public:
   void PauseStream(uint32_t sid);
   void ResumeStream(uint32_t sid);
 
+  struct IncompleteTask {
+      int file_id;
+      std::string filename;
+      std::string username; // 新增用户名字段
+      uint64_t total_size;
+      uint64_t current_offset;
+      std::string local_path;
+  };
+  
+  static std::vector<IncompleteTask> ScanIncompleteDownloads(const std::string &directory);
+
 private:
+  std::string current_user_; // 记录当前登录用户
   void ShowProgressBar(uint64_t current, uint64_t total);
   std::string FormatSize(uint64_t bytes);
   

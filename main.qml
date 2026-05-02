@@ -19,6 +19,7 @@ ApplicationWindow {
     Item {
         id: appState
         state: "login"
+        property string currentUser: "" // 记录当前登录用户名
         states: [ State { name: "login" }, State { name: "main" } ]
     }
 
@@ -60,23 +61,8 @@ ApplicationWindow {
     }
 
     Component.onCompleted: {
-        var savedTasks = client.loadTasks()
-        for (var i = 0; i < savedTasks.length; i++) {
-            var t = savedTasks[i]
-            
-            // 数据清洗：确保关键字段不为空
-            if (t.sid === undefined) t.sid = -1;
-            if (t.filename === undefined) t.filename = "未知文件";
-            if (t.status === undefined) t.status = "中断";
-            if (t.totalSize === undefined) t.totalSize = 0;
-            if (t.transferred === undefined) t.transferred = 0;
-            if (t.progress === undefined) t.progress = 0;
-            if (t.eta === undefined) t.eta = 0;
-            
-            // 如果是之前的运行状态，强制设为“中断”
-            if (t.status === "传输中" || t.status === "已暂停") t.status = "中断"
-            transferModel.append(t)
-        }
+        // 启动时不再自动扫描，改为登录成功后再根据用户名扫描
+        // (保持 Component.onCompleted 为空或仅处理通用初始化)
     }
 
     // --- 辅助功能 ---
@@ -142,7 +128,19 @@ ApplicationWindow {
         function onLoginResult(success, message) {
             loginPopupText.text = message
             loginPopup.open()
-            if (success) { appState.state = "main"; client.listFiles(currentParentId) }
+            if (success) { 
+                appState.state = "main"
+                // 触发物理扫描来找回该用户的任务
+                var incompleteDownloads = client.scanIncompleteDownloads(".")
+                for (var i = 0; i < incompleteDownloads.length; i++) {
+                    var t = incompleteDownloads[i]
+                    // 核心过滤：只添加属于当前用户的下载任务
+                    if (t.username === appState.currentUser) {
+                        transferModel.append(t)
+                    }
+                }
+                client.listFiles(currentParentId) 
+            }
         }
         function onFileListReceived(files) {
             fileListModel.clear()
@@ -218,6 +216,7 @@ ApplicationWindow {
 
         LoginPage {
             onLoginRequested: (ip, user, pass) => {
+                appState.currentUser = user // 预存用户名
                 client.connectToServer(ip, 8080); client.login(user, pass)
             }
         }
