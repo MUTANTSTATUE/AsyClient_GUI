@@ -28,11 +28,62 @@ ApplicationWindow {
         states: [ State { name: "cloud" }, State { name: "transfer" } ]
     }
 
+    // --- 目录状态管理 ---
+    property int currentParentId: 0
+    property var pathStack: [{"id": 0, "name": "根目录"}]
+
+    // --- 持久化计时器 ---
+    function saveTasks() {
+        var tasks = []
+        for (var i = 0; i < transferModel.count; i++) {
+            var item = transferModel.get(i)
+            tasks.push({
+                "sid": item.sid,
+                "fileId": item.fileId,
+                "filename": item.filename,
+                "localPath": item.localPath || "",
+                "parentId": item.parentId || 0,
+                "type": item.type,
+                "totalSize": item.totalSize,
+                "transferred": item.transferred,
+                "status": item.status,
+                "progress": item.progress,
+                "eta": item.eta
+            })
+        }
+        console.log("[QML] Explicitly saving " + tasks.length + " tasks...")
+        client.saveTasks(tasks)
+    }
+
+    Component.onDestruction: {
+        saveTasks()
+    }
+
+    Component.onCompleted: {
+        var savedTasks = client.loadTasks()
+        for (var i = 0; i < savedTasks.length; i++) {
+            var t = savedTasks[i]
+            
+            // 数据清洗：确保关键字段不为空
+            if (t.sid === undefined) t.sid = -1;
+            if (t.filename === undefined) t.filename = "未知文件";
+            if (t.status === undefined) t.status = "中断";
+            if (t.totalSize === undefined) t.totalSize = 0;
+            if (t.transferred === undefined) t.transferred = 0;
+            if (t.progress === undefined) t.progress = 0;
+            if (t.eta === undefined) t.eta = 0;
+            
+            // 如果是之前的运行状态，强制设为“中断”
+            if (t.status === "传输中" || t.status === "已暂停") t.status = "中断"
+            transferModel.append(t)
+        }
+    }
+
     // --- 辅助功能 ---
     FileDialog {
         id: fileDialog
         title: "选择上传文件"
-        onAccepted: { client.upload(selectedFile.toString()); currentView.state = "transfer" }
+        onAccepted: { client.upload(currentParentId, selectedFile.toString()); currentView.state = "transfer" }
     }
 
     function selectedCount() {
@@ -44,8 +95,44 @@ ApplicationWindow {
     }
 
     function clearCompleted() {
+        var removed = false;
         for (var i = transferModel.count - 1; i >= 0; i--) {
-            if (transferModel.get(i).status === "已完成") transferModel.remove(i);
+            var status = transferModel.get(i).status;
+            if (status === "已完成" || status === "已取消") {
+                transferModel.remove(i);
+                removed = true;
+            }
+        }
+        if (removed) saveTasks();
+    }
+
+    function cancelAll() {
+        for (var i = 0; i < transferModel.count; i++) {
+            var item = transferModel.get(i);
+            if (item.status === "传输中" || item.status === "已暂停") {
+                client.cancelTransfer(item.sid);
+                transferModel.setProperty(i, "status", "已取消");
+            }
+        }
+    }
+
+    function pauseAll() {
+        for (var i = 0; i < transferModel.count; i++) {
+            var item = transferModel.get(i);
+            if (item.status === "传输中") {
+                client.pauseTransfer(item.sid);
+                transferModel.setProperty(i, "status", "已暂停");
+            }
+        }
+    }
+
+    function resumeAll() {
+        for (var i = 0; i < transferModel.count; i++) {
+            var item = transferModel.get(i);
+            if (item.status === "已暂停") {
+                client.resumeTransfer(item.sid);
+                transferModel.setProperty(i, "status", "传输中");
+            }
         }
     }
 
@@ -55,7 +142,7 @@ ApplicationWindow {
         function onLoginResult(success, message) {
             loginPopupText.text = message
             loginPopup.open()
-            if (success) { appState.state = "main"; client.listFiles() }
+            if (success) { appState.state = "main"; client.listFiles(currentParentId) }
         }
         function onFileListReceived(files) {
             fileListModel.clear()
@@ -63,29 +150,62 @@ ApplicationWindow {
                 var f = files[i]; f.checked = false; fileListModel.append(f)
             }
         }
-        function onTransferStarted(sid, filename, totalSize, type) {
-            transferModel.append({ "sid": sid, "filename": filename, "type": type, "totalSize": totalSize,
+        function onTransferStarted(sid, fileId, filename, totalSize, type, localPath) {
+            var pId = (type === "UP") ? currentParentId : 0
+            transferModel.append({ "sid": sid, "fileId": fileId, "filename": filename, "type": type, "totalSize": totalSize,
+                "localPath": localPath || "", "parentId": pId,
                 "transferred": 0, "speed": 0, "progress": 0, "eta": 0, "status": "传输中", "startTime": Date.now() })
+            saveTasks()
         }
+        // 用于存储 sid 到 model 索引的映射，提高查找速度
+        property var sidToIndex: ({})
+
         function onProgressUpdate(sid, cur, total) {
-            for (var i = 0; i < transferModel.count; ++i) {
-                var item = transferModel.get(i);
-                if (item.sid === sid) {
-                    var now = Date.now();
-                    var duration = (now - item.startTime) / 1000;
-                    var speed = duration > 0 ? cur / duration : 0;
-                    var eta = speed > 0 ? (total - cur) / speed : 0;
-                    transferModel.setProperty(i, "transferred", cur)
-                    transferModel.setProperty(i, "progress", total > 0 ? cur / total : 0)
-                    transferModel.setProperty(i, "speed", speed)
-                    transferModel.setProperty(i, "eta", eta)
-                    if (total > 0 && cur >= total) transferModel.setProperty(i, "status", "已完成")
-                    break;
+            var idx = sidToIndex[sid]
+            if (idx === undefined) {
+                // 第一次找不到，建立映射
+                for (var i = 0; i < transferModel.count; ++i) {
+                    if (transferModel.get(i).sid === sid) {
+                        sidToIndex[sid] = i
+                        idx = i
+                        break
+                    }
+                }
+            }
+            
+            if (idx !== undefined && idx < transferModel.count) {
+                var item = transferModel.get(idx)
+                if (item.sid !== sid) { // 预防 Model 变动导致的索引偏移
+                    sidToIndex = {} // 重置映射
+                    return
+                }
+
+                // --- 节流逻辑：每秒更新次数限制 (最后一次完成包除外) ---
+                var now = Date.now()
+                var isFinished = (total > 0 && cur >= total)
+                if (!isFinished && item.status === "传输中" && item.lastUpdate && (now - item.lastUpdate < 150)) {
+                    return 
+                }
+                transferModel.setProperty(idx, "lastUpdate", now)
+
+                var elapsed = (now - item.startTime) / 1000
+                var speed = cur / elapsed
+                var eta = isFinished ? 0 : (speed > 0 ? (total - cur) / speed : 0)
+                var progress = total > 0 ? cur / total : 0
+                
+                transferModel.setProperty(idx, "transferred", cur)
+                transferModel.setProperty(idx, "progress", progress)
+                transferModel.setProperty(idx, "speed", isFinished ? 0 : speed)
+                transferModel.setProperty(idx, "eta", eta)
+                if (isFinished) {
+                    transferModel.setProperty(idx, "status", "已完成")
+                    delete sidToIndex[sid]
+                    saveTasks()
                 }
             }
         }
-        function onRemoveResult(success, message) { if (success) client.listFiles(); }
-        function onUploadFinished() { client.listFiles(); }
+        function onRemoveResult(success, message) { if (success) client.listFiles(currentParentId); }
+        function onUploadFinished() { client.listFiles(currentParentId); }
     }
 
     // --- 界面布局 ---
@@ -124,8 +244,15 @@ ApplicationWindow {
                     CloudPage {
                         model: fileListModel
                         selectedCount: window.selectedCount()
+                        pathStack: window.pathStack
                         onUploadClicked: fileDialog.open()
-                        onRefreshClicked: client.listFiles()
+                        onRefreshClicked: client.listFiles(currentParentId)
+                        onMakeDirClicked: makeDirDialog.open()
+                        onMoveClicked: {
+                            // Populate move list, just simple "Root" for now as example or parent
+                            // A proper tree view takes more time, let's keep it simple: Move to Root or Parent
+                            moveDialog.open()
+                        }
                         onDownloadSelected: {
                             for (var i = 0; i < fileListModel.count; i++) {
                                 var item = fileListModel.get(i);
@@ -134,15 +261,78 @@ ApplicationWindow {
                             currentView.state = "transfer"
                         }
                         onRemoveSelected: {
+                            confirmDeleteDialog.open()
+                        }
+                        onPreviewSelected: {
                             for (var i = 0; i < fileListModel.count; i++) {
-                                if (fileListModel.get(i).checked) client.remove(fileListModel.get(i).id)
+                                var item = fileListModel.get(i);
+                                if (item.checked) {
+                                    var comp = Qt.createComponent("PreviewWindow.qml");
+                                    if (comp.status === Component.Ready) {
+                                        var win = comp.createObject(window, {
+                                            "filename": item.filename,
+                                            "fileType": Utils.getFileType(item.filename),
+                                            "sourceUrl": client.getPreviewUrl(item.id)
+                                        });
+                                        win.show();
+                                    }
+                                    break;
+                                }
                             }
+                        }
+                        onEnterDirectory: (id, name) => {
+                            var newStack = window.pathStack.slice();
+                            newStack.push({"id": id, "name": name});
+                            window.pathStack = newStack;
+                            window.currentParentId = id;
+                            client.listFiles(id);
+                        }
+                        onNavigateBreadcrumb: (index) => {
+                            var newStack = window.pathStack.slice(0, index + 1);
+                            window.pathStack = newStack;
+                            window.currentParentId = newStack[newStack.length - 1].id;
+                            client.listFiles(window.currentParentId);
                         }
                     }
 
                     TransferPage {
                         model: transferModel
                         onClearCompletedClicked: window.clearCompleted()
+                        onCancelAllClicked: window.cancelAll()
+                        onPauseAllClicked: window.pauseAll()
+                        onResumeAllClicked: window.resumeAll()
+                        onItemActionClicked: (sid, action) => {
+                            for (var i = 0; i < transferModel.count; i++) {
+                                if (transferModel.get(i).sid === sid) {
+                                    if (action === "pause") {
+                                        client.pauseTransfer(sid);
+                                        transferModel.setProperty(i, "status", "已暂停");
+                                        saveTasks()
+                                    } else if (action === "resume") {
+                                        if (transferModel.get(i).status === "中断") {
+                                            // 重新启动任务
+                                            var item = transferModel.get(i)
+                                            if (item.type === "DL") {
+                                                client.download(item.fileId, item.filename)
+                                                transferModel.remove(i)
+                                            } else if (item.type === "UP") {
+                                                client.upload(item.parentId, item.localPath)
+                                                transferModel.remove(i)
+                                            }
+                                        } else {
+                                            client.resumeTransfer(sid);
+                                            transferModel.setProperty(i, "status", "传输中");
+                                        }
+                                        saveTasks()
+                                    } else if (action === "cancel") {
+                                        client.cancelTransfer(sid);
+                                        transferModel.setProperty(i, "status", "已取消");
+                                        saveTasks()
+                                    }
+                                    break;
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -153,5 +343,75 @@ ApplicationWindow {
         id: loginPopup; anchors.centerIn: parent; width: 300; height: 100; modal: true
         background: Rectangle { color: "#222"; radius: 8; border.color: "#444" }
         Text { id: loginPopupText; anchors.centerIn: parent; color: "white" }
+    }
+
+    Dialog {
+        id: makeDirDialog; anchors.centerIn: parent; width: 300; modal: true
+        title: "新建文件夹"
+        background: Rectangle { color: "#222"; radius: 8; border.color: "#444" }
+        contentItem: ColumnLayout {
+            TextField {
+                id: dirNameInput; Layout.fillWidth: true; placeholderText: "文件夹名称"
+                color: "white"; background: Rectangle { color: "#333"; radius: 4 }
+            }
+        }
+        standardButtons: Dialog.Ok | Dialog.Cancel
+        onAccepted: {
+            if (dirNameInput.text.trim() !== "") {
+                client.makeDir(window.currentParentId, dirNameInput.text.trim());
+                dirNameInput.text = "";
+            }
+        }
+    }
+
+    Dialog {
+        id: confirmDeleteDialog; anchors.centerIn: parent; width: 350; modal: true
+        title: "确认删除"
+        background: Rectangle { color: "#222"; radius: 8; border.color: "#444" }
+        contentItem: Text {
+            text: "确定要删除选中的项目吗？如果是文件夹，其内容也将被全部删除！"
+            color: "white"; wrapMode: Text.WordWrap; width: 300
+        }
+        standardButtons: Dialog.Yes | Dialog.No
+        onAccepted: {
+            for (var i = 0; i < fileListModel.count; i++) {
+                if (fileListModel.get(i).checked) client.remove(fileListModel.get(i).id)
+            }
+        }
+    }
+
+    Dialog {
+        id: moveDialog; anchors.centerIn: parent; width: 350; modal: true
+        title: "选择目标文件夹"
+        background: Rectangle { color: "#222"; radius: 8; border.color: "#444" }
+        
+        property var dirList: []
+        
+        onOpened: {
+            dirList = client.getAllDirectories()
+            var paths = []
+            for (var i = 0; i < dirList.length; i++) {
+                paths.push(dirList[i].path)
+            }
+            moveCombo.model = paths
+            moveCombo.currentIndex = 0
+        }
+
+        contentItem: ColumnLayout {
+            Text { text: "移动到:"; color: "white" }
+            ComboBox {
+                id: moveCombo
+                Layout.fillWidth: true
+            }
+        }
+        standardButtons: Dialog.Ok | Dialog.Cancel
+        onAccepted: {
+            if (dirList.length > 0 && moveCombo.currentIndex >= 0) {
+                var targetId = dirList[moveCombo.currentIndex].id
+                for (var i = 0; i < fileListModel.count; i++) {
+                    if (fileListModel.get(i).checked) client.moveFile(fileListModel.get(i).id, targetId)
+                }
+            }
+        }
     }
 }

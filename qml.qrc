@@ -7,5 +7,6 @@
         <file>CloudPage.qml</file>
         <file>TransferPage.qml</file>
         <file>Utils.js</file>
+        <file>PreviewWindow.qml</file>
     </qresource>
 </RCC>

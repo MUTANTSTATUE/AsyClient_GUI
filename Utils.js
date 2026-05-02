@@ -17,17 +17,23 @@ function formatTime(seconds) {
 }
 
 function getFileIcon(filename) {
-    var ext = filename.split('.').pop().toLowerCase();
+    if (!filename) return "📄";
+    var parts = filename.split('.');
+    if (parts.length < 2) return "📄";
+    var ext = parts.pop().toLowerCase();
     if (["jpg", "jpeg", "png", "gif", "bmp"].indexOf(ext) >= 0) return "🖼️";
-    if (["mp4", "mkv", "avi", "mov", "flv"].indexOf(ext) >= 0) return "🎬";
+    if (["mp4", "mkv", "avi", "mov", "flv", "mpv"].indexOf(ext) >= 0) return "🎬";
     if (["mp3", "flac", "wav", "m4a"].indexOf(ext) >= 0) return "🎵";
     return "📄";
 }
 
 function getFileType(filename) {
-    var ext = filename.split('.').pop().toLowerCase();
+    if (!filename) return "文件";
+    var parts = filename.split('.');
+    if (parts.length < 2) return "文件";
+    var ext = parts.pop().toLowerCase();
     if (["jpg", "jpeg", "png", "gif", "bmp"].indexOf(ext) >= 0) return "图像";
-    if (["mp4", "mkv", "avi", "mov", "flv"].indexOf(ext) >= 0) return "视频";
+    if (["mp4", "mkv", "avi", "mov", "flv", "mpv"].indexOf(ext) >= 0) return "视频";
     if (["mp3", "flac", "wav", "m4a"].indexOf(ext) >= 0) return "音频";
     return "文件";
 }

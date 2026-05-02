@@ -8,6 +8,10 @@ Rectangle {
     
     property var model
     signal clearCompletedClicked()
+    signal pauseAllClicked()
+    signal resumeAllClicked()
+    signal cancelAllClicked()
+    signal itemActionClicked(int sid, string action)
 
     ColumnLayout {
         anchors.fill: parent
@@ -24,24 +28,48 @@ Rectangle {
                 Item { Layout.fillWidth: true }
                 RowLayout {
                     spacing: 25
-                    RowLayout { 
-                        spacing: 8; opacity: 0.5
-                        Text { text: "⏸"; color: "white" }
-                        Text { text: "暂停所有"; color: "white" }
-                    }
+                    // 暂停/恢复所有
                     MouseArea {
-                        Layout.preferredWidth: 100; Layout.preferredHeight: 20; cursorShape: Qt.PointingHandCursor
+                        Layout.preferredWidth: 100; Layout.preferredHeight: 30
+                        cursorShape: Qt.PointingHandCursor
                         RowLayout { 
                             anchors.fill: parent; spacing: 8
-                            Text { text: "↻"; color: "white" }
+                            Text { text: "⏸/▶"; color: "white"; font.pixelSize: 14 }
+                            Text { text: "全部暂停/恢复"; color: "white" }
+                        }
+                        onClicked: {
+                            // Simple logic: if any is running, pause all; otherwise resume all
+                            var hasRunning = false;
+                            for (var i = 0; i < root.model.count; i++) {
+                                if (root.model.get(i).status === "传输中") { hasRunning = true; break; }
+                            }
+                            if (hasRunning) root.pauseAllClicked();
+                            else root.resumeAllClicked();
+                        }
+                    }
+                    
+                    // 清除已完成
+                    MouseArea {
+                        Layout.preferredWidth: 100; Layout.preferredHeight: 30
+                        cursorShape: Qt.PointingHandCursor
+                        RowLayout { 
+                            anchors.fill: parent; spacing: 8
+                            Text { text: "↻"; color: "white"; font.pixelSize: 14 }
                             Text { text: "清除已完成"; color: "white" }
                         }
                         onClicked: root.clearCompletedClicked()
                     }
-                    RowLayout { 
-                        spacing: 8
-                        Text { text: "✕"; color: "#e74c3c" }
-                        Text { text: "取消所有"; color: "#e74c3c" }
+                    
+                    // 取消所有
+                    MouseArea {
+                        Layout.preferredWidth: 100; Layout.preferredHeight: 30
+                        cursorShape: Qt.PointingHandCursor
+                        RowLayout { 
+                            anchors.fill: parent; spacing: 8
+                            Text { text: "✕"; color: "#e74c3c"; font.pixelSize: 14 }
+                            Text { text: "取消所有"; color: "#e74c3c" }
+                        }
+                        onClicked: root.cancelAllClicked()
                     }
                 }
             }
@@ -82,16 +110,37 @@ Rectangle {
                         anchors.fill: parent; anchors.leftMargin: 25; anchors.rightMargin: 25
                         RowLayout { 
                             Layout.preferredWidth: 300; spacing: 15
-                            Text { text: Utils.getFileIcon(filename); font.pixelSize: 22 }
-                            Text { text: filename; color: "white"; Layout.fillWidth: true; elide: Text.ElideRight }
+                            Text { text: Utils.getFileIcon(model.filename || ""); font.pixelSize: 22 }
+                            Text { text: model.filename || ""; color: "white"; Layout.fillWidth: true; elide: Text.ElideRight }
                         }
-                        Text { text: Utils.getFileType(filename); color: "#888"; Layout.preferredWidth: 150 }
-                        Text { text: Utils.formatBytes(totalSize); color: "#888"; Layout.preferredWidth: 100 }
-                        Text { text: Utils.formatBytes(transferred); color: "#888"; Layout.preferredWidth: 100 }
-                        Text { text: status === "已完成" ? "" : Utils.formatTime(eta); color: "#888"; Layout.fillWidth: true }
-                        Text { text: status; color: status === "已完成" ? "#2ecc71" : "#3498db"; Layout.preferredWidth: 80; horizontalAlignment: Text.AlignRight; font.bold: true }
+                        Text { text: Utils.getFileType(model.filename || ""); color: "#888"; Layout.preferredWidth: 150 }
+                        Text { text: Utils.formatBytes(model.totalSize || 0); color: "#888"; Layout.preferredWidth: 100 }
+                        Text { text: Utils.formatBytes(model.transferred || 0); color: "#888"; Layout.preferredWidth: 100 }
+                        Text { text: model.status === "已完成" ? "" : Utils.formatTime(model.eta || 0); color: "#888"; Layout.fillWidth: true }
+                        Text { text: model.status || ""; color: model.status === "已完成" ? "#2ecc71" : (model.status === "已暂停" || model.status === "中断" ? "#f39c12" : "#3498db"); Layout.preferredWidth: 80; horizontalAlignment: Text.AlignRight; font.bold: true }
+                        
+                        // 操作按钮
+                        RowLayout {
+                            Layout.preferredWidth: 60; spacing: 10; visible: model.status !== "已完成" && model.status !== "已取消"
+                            Text { 
+                                text: (model.status === "已暂停" || model.status === "中断") ? "▶" : "⏸"
+                                color: "white"; font.pixelSize: 16
+                                MouseArea { 
+                                    anchors.fill: parent; cursorShape: Qt.PointingHandCursor
+                                    onClicked: root.itemActionClicked(model.sid, (model.status === "已暂停" || model.status === "中断") ? "resume" : "pause")
+                                }
+                            }
+                            Text { 
+                                text: "✕"
+                                color: "#e74c3c"; font.pixelSize: 16
+                                MouseArea { 
+                                    anchors.fill: parent; cursorShape: Qt.PointingHandCursor
+                                    onClicked: root.itemActionClicked(model.sid, "cancel")
+                                }
+                            }
+                        }
                     }
-                    Rectangle { anchors.bottom: parent.bottom; width: parent.width * progress; height: 2; color: "#3498db"; visible: status !== "已完成" }
+                    Rectangle { anchors.bottom: parent.bottom; width: parent.width * model.progress; height: 2; color: "#3498db"; visible: model.status !== "已完成" }
                 }
             }
         }

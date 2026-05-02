@@ -17,21 +17,39 @@ public:
 
     Q_INVOKABLE void connectToServer(const QString &ip, int port);
     Q_INVOKABLE void login(const QString &user, const QString &pass);
-    Q_INVOKABLE void listFiles();
-    Q_INVOKABLE void upload(const QString &path);
+    Q_INVOKABLE void listFiles(int parentId = 0);
+    Q_INVOKABLE void upload(int parentId, const QString &localPath);
     Q_INVOKABLE void download(int fileId, const QString &filename);
     Q_INVOKABLE void remove(int fileId);
+    Q_INVOKABLE void makeDir(int parentId, const QString &dirname);
+    Q_INVOKABLE void moveFile(int fileId, int newParentId);
+    Q_INVOKABLE QVariantList getAllDirectories();
+    Q_INVOKABLE QString getPreviewUrl(int fileId);
+    
+    Q_INVOKABLE void pauseTransfer(int sid);
+    Q_INVOKABLE void resumeTransfer(int sid);
+    Q_INVOKABLE void cancelTransfer(int sid);
+    Q_INVOKABLE void cancelAllTransfers();
+
+    Q_INVOKABLE void saveTasks(const QVariantList &tasks);
+    Q_INVOKABLE QVariantList loadTasks();
 
 signals:
     void connectedChanged();
     void loginResult(bool success, QString message);
     void fileListReceived(QVariantList files);
-    void transferStarted(int sid, QString filename, qint64 totalSize, QString type);
+    void transferStarted(int sid, int fileId, const QString &filename, qint64 totalSize, const QString &type, const QString &localPath = "");
     void progressUpdate(int sid, qint64 cur, qint64 total);
     void removeResult(bool success, QString message);
     void uploadFinished();
 
+private slots:
+    void handleProxyConnection();
+
 private:
     AsyCClient *m_client;
     bool m_connected;
+    
+    class QTcpServer *m_proxyServer;
+    int m_proxyPort;
 };

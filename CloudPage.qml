@@ -9,11 +9,17 @@ ColumnLayout {
     
     property var model
     property int selectedCount: 0
+    property var pathStack: [{"id": 0, "name": "根目录"}]
     
     signal uploadClicked()
     signal refreshClicked()
     signal downloadSelected()
     signal removeSelected()
+    signal previewSelected()
+    signal makeDirClicked()
+    signal moveClicked()
+    signal enterDirectory(int id, string name)
+    signal navigateBreadcrumb(int index)
 
     // 工具栏
     Rectangle {
@@ -28,6 +34,7 @@ ColumnLayout {
             Button {
                 text: "➕ 新建文件夹"; background: Rectangle { radius: 4; color: "#333" }
                 contentItem: Text { text: parent.text; color: "white"; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter }
+                onClicked: root.makeDirClicked()
             }
             Rectangle { width: 1; height: 20; color: "#444"; visible: root.selectedCount > 0 }
             Button {
@@ -37,10 +44,22 @@ ColumnLayout {
                 onClicked: root.downloadSelected()
             }
             Button {
+                text: "➡️ 移动"; visible: root.selectedCount > 0
+                background: Rectangle { radius: 4; color: "#f39c12" }
+                contentItem: Text { text: parent.text; color: "white"; font.bold: true; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter }
+                onClicked: root.moveClicked()
+            }
+            Button {
                 text: "🗑️ 删除"; visible: root.selectedCount > 0
                 background: Rectangle { radius: 4; color: "#e74c3c" }
                 contentItem: Text { text: parent.text; color: "white"; font.bold: true; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter }
                 onClicked: root.removeSelected()
+            }
+            Button {
+                text: "👁️ 预览"; visible: root.selectedCount === 1
+                background: Rectangle { radius: 4; color: "#9b59b6" }
+                contentItem: Text { text: parent.text; color: "white"; font.bold: true; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter }
+                onClicked: root.previewSelected()
             }
             Item { Layout.fillWidth: true }
             Button {
@@ -52,12 +71,31 @@ ColumnLayout {
         }
     }
 
+    // 面包屑导航
+    Rectangle {
+        Layout.fillWidth: true; Layout.preferredHeight: 30; color: "#1e1e1e"
+        RowLayout {
+            anchors.fill: parent; anchors.leftMargin: 20; spacing: 5
+            Repeater {
+                model: root.pathStack
+                delegate: RowLayout {
+                    spacing: 5
+                    Text { 
+                        text: modelData.name; color: "#3498db"; font.pixelSize: 14; font.bold: true
+                        MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: root.navigateBreadcrumb(index) }
+                    }
+                    Text { text: ">"; color: "#888"; visible: index < root.pathStack.length - 1 }
+                }
+            }
+        }
+    }
+
     // 网格内容
     Rectangle {
         Layout.fillWidth: true; Layout.fillHeight: true; color: "transparent"
         ColumnLayout {
             anchors.centerIn: parent; spacing: 20; opacity: 0.5; visible: root.model.count === 0
-            Image { sourceSize: Qt.size(200, 200); source: "https://via.placeholder.com/200"; Layout.alignment: Qt.AlignHCenter }
+            Image { sourceSize: Qt.size(200, 200); source: "https://via.placeholder.com/200"; Layout.alignment: Qt.AlignHCenter; visible: false }
             Text { text: "您的云盘还什么都没有"; color: "white"; font.pixelSize: 18; Layout.alignment: Qt.AlignHCenter }
             Button { text: "刷新"; Layout.alignment: Qt.AlignHCenter; onClicked: root.refreshClicked() }
         }
@@ -72,8 +110,8 @@ ColumnLayout {
                         Layout.preferredWidth: 160; Layout.preferredHeight: 160; color: "#252525"; radius: 8
                         border.color: gridMouse.containsMouse ? "#444" : "transparent"
                         Rectangle {
-                            anchors.centerIn: parent; width: 60; height: 75; radius: 4; color: "#3498db"
-                            Text { anchors.centerIn: parent; text: Utils.getFileIcon(filename); color: "white"; font.pixelSize: 30 }
+                            anchors.centerIn: parent; width: 60; height: 75; radius: 4; color: is_dir ? "#f1c40f" : "#3498db"
+                            Text { anchors.centerIn: parent; text: is_dir ? "📁" : Utils.getFileIcon(filename); color: "white"; font.pixelSize: 30 }
                         }
                         Rectangle {
                             anchors.top: parent.top; anchors.left: parent.left; anchors.margins: 8; width: 20; height: 20; radius: 4
@@ -85,10 +123,17 @@ ColumnLayout {
                     RowLayout {
                         Layout.fillWidth: true
                         Text { text: filename; color: "white"; font.pixelSize: 13; Layout.fillWidth: true; elide: Text.ElideRight }
-                        Text { text: "⋮"; color: "white"; font.pixelSize: 18; visible: gridMouse.containsMouse }
                     }
                 }
-                MouseArea { id: gridMouse; anchors.fill: parent; hoverEnabled: true; onClicked: root.model.setProperty(index, "checked", !checked) }
+                MouseArea { 
+                    id: gridMouse; anchors.fill: parent; hoverEnabled: true; 
+                    onClicked: root.model.setProperty(index, "checked", !checked) 
+                    onDoubleClicked: {
+                        if (is_dir) {
+                            root.enterDirectory(id, filename)
+                        }
+                    }
+                }
             }
         }
     }

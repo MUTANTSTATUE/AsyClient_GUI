@@ -9,10 +9,10 @@ set(CMAKE_AUTORCC ON)
 set(CMAKE_AUTOUIC ON)
 
 # Find Qt
-find_package(Qt6 REQUIRED COMPONENTS Core Gui Qml Quick QuickControls2)
+find_package(Qt6 REQUIRED COMPONENTS Core Gui Qml Quick QuickControls2 Network Multimedia)
 find_package(Qt6 OPTIONAL_COMPONENTS Qt5Compat)
 if(NOT Qt6_FOUND)
-    find_package(Qt5 REQUIRED COMPONENTS Core Gui Qml Quick QuickControls2 GraphicalEffects)
+    find_package(Qt5 REQUIRED COMPONENTS Core Gui Qml Quick QuickControls2 GraphicalEffects Network Multimedia)
 endif()
 
 include_directories(include)
@@ -33,6 +33,8 @@ target_link_libraries(AsyClient_GUI
     Qt${Qt6_VERSION_MAJOR}::Qml
     Qt${Qt6_VERSION_MAJOR}::Quick
     Qt${Qt6_VERSION_MAJOR}::QuickControls2
+    Qt${Qt6_VERSION_MAJOR}::Network
+    Qt${Qt6_VERSION_MAJOR}::Multimedia
     $<$<BOOL:${Qt6Compat5_FOUND}>:Qt6::Qt5Compat>
     pthread
 )
