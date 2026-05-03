@@ -31,6 +31,7 @@ ApplicationWindow {
 
     // --- 目录状态管理 ---
     property int currentParentId: 0
+    property var sidToIndex: ({}) // 移动到这里：根层级
     property var pathStack: [{"id": 0, "name": "根目录"}]
 
     // --- 持久化计时器 ---
@@ -38,6 +39,9 @@ ApplicationWindow {
         var tasks = []
         for (var i = 0; i < transferModel.count; i++) {
             var item = transferModel.get(i)
+            // 核心优化：下载任务通过物理扫描恢复，json 只存储无法物理找回的上传任务
+            if (item.type !== "UP") continue;
+            
             tasks.push({
                 "sid": item.sid,
                 "fileId": item.fileId,
@@ -49,7 +53,8 @@ ApplicationWindow {
                 "transferred": item.transferred,
                 "status": item.status,
                 "progress": item.progress,
-                "eta": item.eta
+                "eta": item.eta,
+                "username": item.username || ""
             })
         }
         console.log("[QML] Explicitly saving " + tasks.length + " tasks...")
@@ -69,7 +74,24 @@ ApplicationWindow {
     FileDialog {
         id: fileDialog
         title: "选择上传文件"
-        onAccepted: { client.upload(currentParentId, selectedFile.toString()); currentView.state = "transfer" }
+        onAccepted: { 
+            var path = selectedFile.toString();
+            // 查重逻辑：检查是否已经在上传同一文件
+            var exists = false;
+            var cleanPath = path.replace("file://", "");
+            for (var i = 0; i < transferModel.count; i++) {
+                if (transferModel.get(i).localPath === cleanPath && transferModel.get(i).status !== "已完成") {
+                    exists = true; break;
+                }
+            }
+            if (!exists) {
+                client.upload(currentParentId, path); 
+                currentView.state = "transfer"
+            } else {
+                loginPopupText.text = "该文件已经在上传列表中！"
+                loginPopup.open()
+            }
+        }
     }
 
     function selectedCount() {
@@ -125,80 +147,115 @@ ApplicationWindow {
     // --- 后端信号连接 ---
     Connections {
         target: client
+        
         function onLoginResult(success, message) {
             loginPopupText.text = message
             loginPopup.open()
             if (success) { 
                 appState.state = "main"
-                // 触发物理扫描来找回该用户的任务
+                // 1. 下载任务扫描
                 var incompleteDownloads = client.scanIncompleteDownloads(".")
                 for (var i = 0; i < incompleteDownloads.length; i++) {
                     var t = incompleteDownloads[i]
-                    // 核心过滤：只添加属于当前用户的下载任务
                     if (t.username === appState.currentUser) {
+                        t.speed = 0; t.eta = 0; t.progress = t.totalSize > 0 ? t.transferred / t.totalSize : 0;
+                        t.startTime = Date.now(); t.initialTransferred = t.transferred || 0;
+                        t.baselineReady = false; t.lastUpdate = 0;
                         transferModel.append(t)
+                    }
+                }
+                // 2. 上传任务加载
+                var savedTasks = client.loadTasks()
+                for (var j = 0; j < savedTasks.length; j++) {
+                    var st = savedTasks[j]
+                    if (st.type === "UP" && st.username === appState.currentUser) {
+                        var exists = false
+                        for (var k = 0; k < transferModel.count; k++) {
+                            if (transferModel.get(k).localPath === st.localPath) { exists = true; break; }
+                        }
+                        if (!exists) {
+                            st.status = "中断"; st.speed = 0; st.eta = 0; st.startTime = Date.now();
+                            transferModel.append(st)
+                        }
                     }
                 }
                 client.listFiles(currentParentId) 
             }
         }
+
         function onFileListReceived(files) {
             fileListModel.clear()
             for (var i = 0; i < files.length; i++) {
                 var f = files[i]; f.checked = false; fileListModel.append(f)
             }
         }
+
         function onTransferStarted(sid, fileId, filename, totalSize, type, localPath) {
             var pId = (type === "UP") ? currentParentId : 0
-            transferModel.append({ "sid": sid, "fileId": fileId, "filename": filename, "type": type, "totalSize": totalSize,
-                "localPath": localPath || "", "parentId": pId,
-                "transferred": 0, "speed": 0, "progress": 0, "eta": 0, "status": "传输中", "startTime": Date.now() })
+            var cleanPath = (localPath || "").replace("file://", "")
+            var existingIdx = -1
+            for (var i = 0; i < transferModel.count; i++) {
+                var item = transferModel.get(i)
+                if (type === "DL" && item.fileId === fileId) { existingIdx = i; break; }
+                if (type === "UP" && item.localPath === cleanPath) { existingIdx = i; break; }
+            }
+            if (existingIdx !== -1) {
+                var oldItem = transferModel.get(existingIdx)
+                transferModel.setProperty(existingIdx, "sid", sid)
+                transferModel.setProperty(existingIdx, "status", "传输中")
+                transferModel.setProperty(existingIdx, "startTime", Date.now())
+                transferModel.setProperty(existingIdx, "initialTransferred", oldItem.transferred || 0)
+                transferModel.setProperty(existingIdx, "speed", 0)
+                transferModel.setProperty(existingIdx, "eta", 0)
+                sidToIndex[sid] = existingIdx
+            } else {
+                transferModel.append({ 
+                    "sid": sid, "fileId": fileId, "filename": filename, "type": type, "totalSize": totalSize,
+                    "localPath": cleanPath, "parentId": pId, "username": appState.currentUser,
+                    "transferred": 0, "speed": 0, "progress": 0, "eta": 0, "status": "传输中", 
+                    "startTime": Date.now(), "initialTransferred": 0 
+                })
+            }
             saveTasks()
         }
-        // 用于存储 sid 到 model 索引的映射，提高查找速度
-        property var sidToIndex: ({})
 
         function onProgressUpdate(sid, cur, total) {
             var idx = sidToIndex[sid]
             if (idx === undefined) {
-                // 第一次找不到，建立映射
                 for (var i = 0; i < transferModel.count; ++i) {
                     if (transferModel.get(i).sid === sid) {
-                        sidToIndex[sid] = i
-                        idx = i
-                        break
+                        sidToIndex[sid] = i; idx = i; break;
                     }
                 }
             }
-            
             if (idx !== undefined && idx < transferModel.count) {
-                var item = transferModel.get(idx)
-                if (item.sid !== sid) { // 预防 Model 变动导致的索引偏移
-                    sidToIndex = {} // 重置映射
-                    return
-                }
-
-                // --- 节流逻辑：每秒更新次数限制 (最后一次完成包除外) ---
                 var now = Date.now()
                 var isFinished = (total > 0 && cur >= total)
-                if (!isFinished && item.status === "传输中" && item.lastUpdate && (now - item.lastUpdate < 150)) {
+                var latestItem = transferModel.get(idx)
+                if (!isFinished && latestItem.status === "传输中" && latestItem.lastUpdate && (now - latestItem.lastUpdate < 150)) return 
+                
+                transferModel.setProperty(idx, "lastUpdate", now)
+                transferModel.setProperty(idx, "transferred", cur)
+                transferModel.setProperty(idx, "progress", total > 0 ? cur / total : 0)
+
+                var initialT = latestItem.initialTransferred
+                var startT = latestItem.startTime
+                if (initialT === undefined || initialT === 0 || startT === 0) {
+                    transferModel.setProperty(idx, "initialTransferred", cur)
+                    transferModel.setProperty(idx, "startTime", now)
                     return 
                 }
-                transferModel.setProperty(idx, "lastUpdate", now)
-
-                var elapsed = (now - item.startTime) / 1000
-                var speed = cur / elapsed
-                var eta = isFinished ? 0 : (speed > 0 ? (total - cur) / speed : 0)
-                var progress = total > 0 ? cur / total : 0
-                
-                transferModel.setProperty(idx, "transferred", cur)
-                transferModel.setProperty(idx, "progress", progress)
-                transferModel.setProperty(idx, "speed", isFinished ? 0 : speed)
-                transferModel.setProperty(idx, "eta", eta)
+                var deltaBytes = cur - initialT
+                var deltaTime = (now - startT) / 1000
+                if (deltaTime > 1.5 && deltaBytes > 0) {
+                    var speed = deltaBytes / deltaTime
+                    transferModel.setProperty(idx, "speed", isFinished ? 0 : speed)
+                    transferModel.setProperty(idx, "eta", (isFinished || speed <= 0) ? 0 : (total - cur) / speed)
+                }
                 if (isFinished) {
                     transferModel.setProperty(idx, "status", "已完成")
-                    delete sidToIndex[sid]
-                    saveTasks()
+                    transferModel.setProperty(idx, "speed", 0); transferModel.setProperty(idx, "eta", 0)
+                    delete sidToIndex[sid]; saveTasks()
                 }
             }
         }
@@ -255,7 +312,20 @@ ApplicationWindow {
                         onDownloadSelected: {
                             for (var i = 0; i < fileListModel.count; i++) {
                                 var item = fileListModel.get(i);
-                                if (item.checked) client.download(item.id, item.filename)
+                                if (item.checked) {
+                                    // 查重逻辑：检查是否已在下载列表中
+                                    var exists = false;
+                                    for (var j = 0; j < transferModel.count; j++) {
+                                        if (transferModel.get(j).fileId === item.id && transferModel.get(j).status !== "已完成") {
+                                            exists = true; break;
+                                        }
+                                    }
+                                    if (!exists) {
+                                        client.download(item.id, item.filename)
+                                    } else {
+                                        console.log("[UI] Download task already exists for: " + item.filename)
+                                    }
+                                }
                             }
                             currentView.state = "transfer"
                         }
@@ -309,8 +379,11 @@ ApplicationWindow {
                                         saveTasks()
                                     } else if (action === "resume") {
                                         if (transferModel.get(i).status === "中断") {
-                                            // 重新启动任务
+                                            // 重新启动任务前，记录当前的已完成量作为初始值，并重置开始时间
                                             var item = transferModel.get(i)
+                                            transferModel.setProperty(i, "initialTransferred", item.transferred)
+                                            transferModel.setProperty(i, "startTime", Date.now())
+                                            
                                             if (item.type === "DL") {
                                                 client.download(item.fileId, item.filename)
                                                 transferModel.remove(i)

@@ -9,7 +9,7 @@ function formatBytes(bytes) {
 }
 
 function formatTime(seconds) {
-    if (seconds === Infinity || isNaN(seconds)) return "--:--";
+    if (seconds <= 0 || seconds === Infinity || isNaN(seconds) || seconds > 86400 * 365) return "--:--";
     var h = Math.floor(seconds / 3600);
     var m = Math.floor((seconds % 3600) / 60);
     var s = Math.floor(seconds % 60);

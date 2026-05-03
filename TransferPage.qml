@@ -79,13 +79,13 @@ Rectangle {
         Rectangle {
             Layout.fillWidth: true; height: 40; color: "#111"; visible: root.model.count > 0
             RowLayout {
-                anchors.fill: parent; anchors.leftMargin: 25; anchors.rightMargin: 25
+                anchors.fill: parent; anchors.leftMargin: 25; anchors.rightMargin: 25; spacing: 10
                 Text { text: "名称"; color: "#666"; Layout.preferredWidth: 300; font.pixelSize: 12 }
-                Text { text: "类型"; color: "#666"; Layout.preferredWidth: 150; font.pixelSize: 12 }
+                Text { text: "类型"; color: "#666"; Layout.preferredWidth: 100; font.pixelSize: 12 }
                 Text { text: "大小"; color: "#666"; Layout.preferredWidth: 100; font.pixelSize: 12 }
-                Text { text: "已传输"; color: "#666"; Layout.preferredWidth: 100; font.pixelSize: 12 }
-                Text { text: "预计完成时间"; color: "#666"; Layout.fillWidth: true; font.pixelSize: 12 }
-                Text { text: "状态"; color: "#666"; Layout.preferredWidth: 80; horizontalAlignment: Text.AlignRight }
+                Text { text: "已传输/进度"; color: "#666"; Layout.preferredWidth: 120; font.pixelSize: 12 }
+                Text { text: "剩余时间 / 速度"; color: "#666"; Layout.fillWidth: true; font.pixelSize: 12 }
+                Text { text: "状态"; color: "#666"; Layout.preferredWidth: 100; horizontalAlignment: Text.AlignRight }
             }
         }
 
@@ -107,35 +107,64 @@ Rectangle {
                     width: parent.width; height: 55
                     Rectangle { anchors.bottom: parent.bottom; width: parent.width; height: 1; color: "#111" }
                     RowLayout {
-                        anchors.fill: parent; anchors.leftMargin: 25; anchors.rightMargin: 25
+                        anchors.fill: parent; anchors.leftMargin: 25; anchors.rightMargin: 25; spacing: 10
                         RowLayout { 
-                            Layout.preferredWidth: 300; spacing: 15
-                            Text { text: Utils.getFileIcon(model.filename || ""); font.pixelSize: 22 }
-                            Text { text: model.filename || ""; color: "white"; Layout.fillWidth: true; elide: Text.ElideRight }
-                        }
-                        Text { text: Utils.getFileType(model.filename || ""); color: "#888"; Layout.preferredWidth: 150 }
-                        Text { text: Utils.formatBytes(model.totalSize || 0); color: "#888"; Layout.preferredWidth: 100 }
-                        Text { text: Utils.formatBytes(model.transferred || 0); color: "#888"; Layout.preferredWidth: 100 }
-                        Text { text: model.status === "已完成" ? "" : Utils.formatTime(model.eta || 0); color: "#888"; Layout.fillWidth: true }
-                        Text { text: model.status || ""; color: model.status === "已完成" ? "#2ecc71" : (model.status === "已暂停" || model.status === "中断" ? "#f39c12" : "#3498db"); Layout.preferredWidth: 80; horizontalAlignment: Text.AlignRight; font.bold: true }
-                        
-                        // 操作按钮
-                        RowLayout {
-                            Layout.preferredWidth: 60; spacing: 10; visible: model.status !== "已完成" && model.status !== "已取消"
+                            Layout.preferredWidth: 300; spacing: 10
                             Text { 
-                                text: (model.status === "已暂停" || model.status === "中断") ? "▶" : "⏸"
-                                color: "white"; font.pixelSize: 16
-                                MouseArea { 
-                                    anchors.fill: parent; cursorShape: Qt.PointingHandCursor
-                                    onClicked: root.itemActionClicked(model.sid, (model.status === "已暂停" || model.status === "中断") ? "resume" : "pause")
+                                text: model.type === "UP" ? "↑" : "↓"
+                                color: model.type === "UP" ? "#e67e22" : "#2ecc71"
+                                font.bold: true; font.pixelSize: 18
+                            }
+                            Text { text: Utils.getFileIcon(model.filename || ""); font.pixelSize: 22 }
+                            ColumnLayout {
+                                spacing: 2; Layout.fillWidth: true
+                                Text { text: model.filename || ""; color: "white"; Layout.fillWidth: true; elide: Text.ElideRight; font.pixelSize: 14 }
+                                Text { 
+                                    text: (model.progress * 100).toFixed(1) + "%" 
+                                    color: "#3498db"; font.pixelSize: 10; visible: model.status !== "已完成"
                                 }
                             }
+                        }
+                        Text { text: Utils.getFileType(model.filename || ""); color: "#888"; Layout.preferredWidth: 100; font.pixelSize: 13 }
+                        Text { text: Utils.formatBytes(model.totalSize || 0); color: "#888"; Layout.preferredWidth: 100; font.pixelSize: 13 }
+                        Text { text: Utils.formatBytes(model.transferred || 0); color: "#888"; Layout.preferredWidth: 120; font.pixelSize: 13 }
+                        ColumnLayout {
+                            Layout.fillWidth: true; spacing: 2
                             Text { 
-                                text: "✕"
-                                color: "#e74c3c"; font.pixelSize: 16
-                                MouseArea { 
-                                    anchors.fill: parent; cursorShape: Qt.PointingHandCursor
-                                    onClicked: root.itemActionClicked(model.sid, "cancel")
+                                text: (model.status === "已完成" || !model.eta) ? "" : Utils.formatTime(model.eta)
+                                color: "white"; font.pixelSize: 13; font.bold: true
+                            }
+                            Text { 
+                                text: model.status === "传输中" ? (Utils.formatBytes(model.speed || 0) + "/s") : ""
+                                color: "#888"; font.pixelSize: 10
+                            }
+                        }
+                        
+                        // 状态与操作区
+                        RowLayout {
+                            Layout.preferredWidth: 100; spacing: 8
+                            Text { 
+                                text: model.status || ""; color: model.status === "已完成" ? "#2ecc71" : (model.status === "已暂停" || model.status === "中断" ? "#f39c12" : "#3498db")
+                                Layout.fillWidth: true; horizontalAlignment: Text.AlignRight; font.bold: true; font.pixelSize: 13
+                            }
+                            // 操作按钮
+                            RowLayout {
+                                spacing: 10; visible: model.status !== "已完成" && model.status !== "已取消"
+                                Text { 
+                                    text: (model.status === "已暂停" || model.status === "中断") ? "▶" : "⏸"
+                                    color: "white"; font.pixelSize: 16
+                                    MouseArea { 
+                                        anchors.fill: parent; cursorShape: Qt.PointingHandCursor
+                                        onClicked: root.itemActionClicked(model.sid, (model.status === "已暂停" || model.status === "中断") ? "resume" : "pause")
+                                    }
+                                }
+                                Text { 
+                                    text: "✕"
+                                    color: "#e74c3c"; font.pixelSize: 16
+                                    MouseArea { 
+                                        anchors.fill: parent; cursorShape: Qt.PointingHandCursor
+                                        onClicked: root.itemActionClicked(model.sid, "cancel")
+                                    }
                                 }
                             }
                         }
