@@ -62,7 +62,8 @@ public:
   struct IncompleteTask {
       int file_id;
       std::string filename;
-      std::string username; // 新增用户名字段
+      int user_id; // 统一使用 user_id 识别
+      std::string username; 
       uint64_t total_size;
       uint64_t current_offset;
       std::string local_path;
