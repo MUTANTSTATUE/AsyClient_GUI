@@ -33,6 +33,8 @@ public:
   void Close();
 
   bool Login(const std::string &user, const std::string &pass);
+  bool Register(const std::string &user, const std::string &pass);
+  int GetCurrentUserId() const { return current_user_id_; }
   json List(int parent_id = 0);
   json GetAllDirs();
   void Upload(const std::string &local_path, int parent_id = 0,
@@ -69,6 +71,7 @@ public:
   static std::vector<IncompleteTask> ScanIncompleteDownloads(const std::string &directory);
 
 private:
+  int current_user_id_ = -1;
   std::string current_user_; // 记录当前登录用户
   void ShowProgressBar(uint64_t current, uint64_t total);
   std::string FormatSize(uint64_t bytes);

@@ -17,6 +17,7 @@ public:
 
     Q_INVOKABLE void connectToServer(const QString &ip, int port);
     Q_INVOKABLE void login(const QString &user, const QString &pass);
+    Q_INVOKABLE void registerUser(const QString &user, const QString &pass);
     Q_INVOKABLE void listFiles(int parentId = 0);
     Q_INVOKABLE void upload(int parentId, const QString &localPath);
     Q_INVOKABLE void download(int fileId, const QString &filename);
@@ -26,6 +27,7 @@ public:
     Q_INVOKABLE void moveFile(int fileId, int newParentId);
     Q_INVOKABLE QVariantList getAllDirectories();
     Q_INVOKABLE QString getPreviewUrl(int fileId);
+    Q_INVOKABLE int getCurrentUserId();
     
     Q_INVOKABLE void pauseTransfer(int sid);
     Q_INVOKABLE void resumeTransfer(int sid);
@@ -38,6 +40,7 @@ public:
 signals:
     void connectedChanged();
     void loginResult(bool success, QString message);
+    void registerResult(bool success, QString message);
     void fileListReceived(QVariantList files);
     void transferStarted(int sid, int fileId, const QString &filename, qint64 totalSize, const QString &type, const QString &localPath = "");
     void progressUpdate(int sid, qint64 cur, qint64 total);

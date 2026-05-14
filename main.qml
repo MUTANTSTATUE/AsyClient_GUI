@@ -154,7 +154,7 @@ ApplicationWindow {
             if (success) { 
                 appState.state = "main"
                 // 1. 下载任务扫描
-                var incompleteDownloads = client.scanIncompleteDownloads(".")
+                var incompleteDownloads = client.scanIncompleteDownloads("usr/" + client.getCurrentUserId())
                 for (var i = 0; i < incompleteDownloads.length; i++) {
                     var t = incompleteDownloads[i]
                     if (t.username === appState.currentUser) {
@@ -181,6 +181,13 @@ ApplicationWindow {
                 }
                 client.listFiles(currentParentId) 
             }
+        }
+
+        function onRegisterResult(success, message) {
+            loginPopupText.text = message
+            loginPopup.open()
+            // 如果注册成功，可以切换回登录模式或自动登录
+            // 这里我们保持在注册界面，让用户看到成功提示后手动返回登录
         }
 
         function onFileListReceived(files) {
@@ -275,6 +282,9 @@ ApplicationWindow {
             onLoginRequested: (ip, user, pass) => {
                 appState.currentUser = user // 预存用户名
                 client.connectToServer(ip, 8080); client.login(user, pass)
+            }
+            onRegisterRequested: (ip, user, pass) => {
+                client.connectToServer(ip, 8080); client.registerUser(user, pass)
             }
         }
 

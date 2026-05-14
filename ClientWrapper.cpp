@@ -14,6 +14,7 @@
 #include <QJsonArray>
 #include <QJsonObject>
 #include <QStandardPaths>
+#include <QDir>
 #include <nlohmann/json.hpp>
 
 ClientWrapper::ClientWrapper(QObject *parent)
@@ -57,6 +58,20 @@ void ClientWrapper::login(const QString &user, const QString &pass)
             emit loginResult(true, "Login Successful");
         } else {
             emit loginResult(false, "Login Failed: Check credentials or server status");
+        }
+    }).detach();
+}
+
+void ClientWrapper::registerUser(const QString &user, const QString &pass)
+{
+    if (!m_client) return;
+    
+    std::thread([this, user, pass]() {
+        bool ok = m_client->Register(user.toStdString(), pass.toStdString());
+        if (ok) {
+            emit registerResult(true, "Registration Successful");
+        } else {
+            emit registerResult(false, "Registration Failed: User may exist or server error");
         }
     }).detach();
 }
@@ -220,12 +235,17 @@ void ClientWrapper::cancelAllTransfers()
 
 void ClientWrapper::saveTasks(const QVariantList &tasks)
 {
+    if (!m_client || m_client->GetCurrentUserId() == -1) return;
+    
+    QString userDir = QString("usr/%1").arg(m_client->GetCurrentUserId());
+    QDir().mkpath(userDir);
+
     QJsonArray array;
     for (const auto &task : tasks) {
         array.append(QJsonObject::fromVariantMap(task.toMap()));
     }
     QJsonDocument doc(array);
-    QFile file("tasks.json");
+    QFile file(userDir + "/tasks.json");
     if (file.open(QFile::WriteOnly)) {
         file.write(doc.toJson());
         file.flush();
@@ -239,7 +259,10 @@ void ClientWrapper::saveTasks(const QVariantList &tasks)
 QVariantList ClientWrapper::loadTasks()
 {
     QVariantList result;
-    QFile file("tasks.json");
+    if (!m_client || m_client->GetCurrentUserId() == -1) return result;
+
+    QString userDir = QString("usr/%1").arg(m_client->GetCurrentUserId());
+    QFile file(userDir + "/tasks.json");
     if (file.open(QFile::ReadOnly)) {
         QJsonDocument doc = QJsonDocument::fromJson(file.readAll());
         QJsonArray array = doc.array();
@@ -373,6 +396,11 @@ void ClientWrapper::handleProxyConnection()
         });
 
     });
+}
+
+int ClientWrapper::getCurrentUserId()
+{
+    return m_client ? m_client->GetCurrentUserId() : -1;
 }
 
 QVariantList ClientWrapper::scanIncompleteDownloads(const QString &dir)
