@@ -1,4 +1,5 @@
 #include "ClientWrapper.h"
+#include <QObject>
 #include <thread>
 #include <QDebug>
 #include <QFileInfo>
@@ -8,6 +9,7 @@
 #include <QTcpSocket>
 #include <QRegularExpression>
 #include <QPointer>
+#include <QCoreApplication>
 #include <QHostAddress>
 #include <QFile>
 #include <QJsonDocument>
@@ -123,12 +125,18 @@ void ClientWrapper::upload(int parentId, const QString &localPath)
 
 void ClientWrapper::download(int fileId, const QString &filename)
 {
-    if (!m_client) return;
+    if (!m_client || m_client->GetCurrentUserId() == -1) return;
     
-    m_client->Download(fileId, filename.toStdString(), [this, filename, fileId](uint32_t sid, uint64_t cur, uint64_t total) {
+    QString appDir = QCoreApplication::applicationDirPath();
+    QString userDir = QString("%1/usr/%2").arg(appDir).arg(m_client->GetCurrentUserId());
+    QDir().mkpath(userDir);
+    
+    QString fullPath = userDir + "/" + filename;
+    
+    m_client->Download(fileId, fullPath.toStdString(), [this, filename, fileId, fullPath](uint32_t sid, uint64_t cur, uint64_t total) {
         static QSet<uint32_t> startedStreams;
         if (!startedStreams.contains(sid)) {
-            emit transferStarted((int)sid, fileId, filename, (qint64)total, "DL", "");
+            emit transferStarted((int)sid, fileId, filename, (qint64)total, "DL", fullPath);
             startedStreams.insert(sid);
         }
         emit progressUpdate((int)sid, (qint64)cur, (qint64)total);
@@ -237,7 +245,8 @@ void ClientWrapper::saveTasks(const QVariantList &tasks)
 {
     if (!m_client || m_client->GetCurrentUserId() == -1) return;
     
-    QString userDir = QString("usr/%1").arg(m_client->GetCurrentUserId());
+    QString appDir = QCoreApplication::applicationDirPath();
+    QString userDir = QString("%1/usr/%2").arg(appDir).arg(m_client->GetCurrentUserId());
     QDir().mkpath(userDir);
 
     QJsonArray array;
@@ -261,7 +270,8 @@ QVariantList ClientWrapper::loadTasks()
     QVariantList result;
     if (!m_client || m_client->GetCurrentUserId() == -1) return result;
 
-    QString userDir = QString("usr/%1").arg(m_client->GetCurrentUserId());
+    QString appDir = QCoreApplication::applicationDirPath();
+    QString userDir = QString("%1/usr/%2").arg(appDir).arg(m_client->GetCurrentUserId());
     QFile file(userDir + "/tasks.json");
     if (file.open(QFile::ReadOnly)) {
         QJsonDocument doc = QJsonDocument::fromJson(file.readAll());
@@ -403,10 +413,11 @@ int ClientWrapper::getCurrentUserId()
     return m_client ? m_client->GetCurrentUserId() : -1;
 }
 
-QVariantList ClientWrapper::scanIncompleteDownloads(const QString &dir)
+QVariantList ClientWrapper::scanIncompleteDownloads(const QString &relativeDir)
 {
     QVariantList list;
-    auto tasks = AsyCClient::ScanIncompleteDownloads(dir.toStdString());
+    QString fullPath = QCoreApplication::applicationDirPath() + "/" + relativeDir;
+    auto tasks = AsyCClient::ScanIncompleteDownloads(fullPath.toStdString());
     for (const auto &t : tasks) {
         QVariantMap map;
         map["sid"] = -1; // 还没分配 sid
