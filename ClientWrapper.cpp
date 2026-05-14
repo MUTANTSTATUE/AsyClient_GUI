@@ -423,6 +423,7 @@ QVariantList ClientWrapper::scanIncompleteDownloads(const QString &relativeDir)
         map["sid"] = -1; // 还没分配 sid
         map["fileId"] = t.file_id;
         map["filename"] = QString::fromStdString(t.filename);
+        map["userId"] = t.user_id;
         map["username"] = QString::fromStdString(t.username);
         map["totalSize"] = (qint64)t.total_size;
         map["transferred"] = (qint64)t.current_offset;

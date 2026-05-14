@@ -39,25 +39,14 @@ ApplicationWindow {
         var tasks = []
         for (var i = 0; i < transferModel.count; i++) {
             var item = transferModel.get(i)
-            // 核心优化：下载任务通过物理扫描恢复，json 只存储无法物理找回的上传任务
-            if (item.type !== "UP") continue;
-            
-            tasks.push({
-                "sid": item.sid,
-                "fileId": item.fileId,
-                "filename": item.filename,
-                "localPath": item.localPath || "",
-                "parentId": item.parentId || 0,
-                "type": item.type,
-                "totalSize": item.totalSize,
-                "transferred": item.transferred,
-                "status": item.status,
-                "progress": item.progress,
-                "eta": item.eta,
-                "username": item.username || ""
-            })
+            // 极致精简：仅保存未完成的上传任务，且只保留路径和目标目录
+            if (item.type === "UP" && item.status !== "已完成") {
+                tasks.push({
+                    "p": item.localPath || "",
+                    "d": item.parentId || 0
+                })
+            }
         }
-        console.log("[QML] Explicitly saving " + tasks.length + " tasks...")
         client.saveTasks(tasks)
     }
 
@@ -164,19 +153,24 @@ ApplicationWindow {
                         transferModel.append(t)
                     }
                 }
-                // 2. 上传任务加载
+                // 2. 上传任务加载 (采用极简格式：p=path, d=parentId)
                 var savedTasks = client.loadTasks()
                 for (var j = 0; j < savedTasks.length; j++) {
                     var st = savedTasks[j]
-                    if (st.type === "UP" && st.username === appState.currentUser) {
-                        var exists = false
-                        for (var k = 0; k < transferModel.count; k++) {
-                            if (transferModel.get(k).localPath === st.localPath) { exists = true; break; }
-                        }
-                        if (!exists) {
-                            st.status = "中断"; st.speed = 0; st.eta = 0; st.startTime = Date.now();
-                            transferModel.append(st)
-                        }
+                    var localPath = st.p || ""
+                    if (!localPath) continue;
+
+                    var exists = false
+                    for (var k = 0; k < transferModel.count; k++) {
+                        if (transferModel.get(k).localPath === localPath) { exists = true; break; }
+                    }
+                    if (!exists) {
+                        transferModel.append({
+                            "sid": -1, "fileId": 0, "filename": localPath.split('/').pop(),
+                            "type": "UP", "totalSize": 0, "localPath": localPath,
+                            "parentId": st.d || 0, "transferred": 0, "speed": 0,
+                            "progress": 0, "eta": 0, "status": "中断", "startTime": 0
+                        })
                     }
                 }
                 client.listFiles(currentParentId) 
