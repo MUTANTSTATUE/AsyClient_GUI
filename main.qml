@@ -146,12 +146,11 @@ ApplicationWindow {
                 var incompleteDownloads = client.scanIncompleteDownloads("usr/" + client.getCurrentUserId())
                 for (var i = 0; i < incompleteDownloads.length; i++) {
                     var t = incompleteDownloads[i]
-                    if (t.username === appState.currentUser) {
-                        t.speed = 0; t.eta = 0; t.progress = t.totalSize > 0 ? t.transferred / t.totalSize : 0;
-                        t.startTime = Date.now(); t.initialTransferred = t.transferred || 0;
-                        t.baselineReady = false; t.lastUpdate = 0;
-                        transferModel.append(t)
-                    }
+                    // 既然是在用户目录下扫描到的，就直接显示，不再校验 username
+                    t.speed = 0; t.eta = 0; t.progress = t.totalSize > 0 ? t.transferred / t.totalSize : 0;
+                    t.startTime = Date.now(); t.initialTransferred = t.transferred || 0;
+                    t.baselineReady = false; t.lastUpdate = 0;
+                    transferModel.append(t)
                 }
                 // 2. 上传任务加载 (采用极简格式：p=path, d=parentId)
                 var savedTasks = client.loadTasks()
