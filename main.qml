@@ -14,6 +14,7 @@ ApplicationWindow {
     // --- 数据模型 ---
     ListModel { id: transferModel }
     ListModel { id: fileListModel }
+    ListModel { id: completedModel }
 
     // --- 状态管理 ---
     Item {
@@ -26,7 +27,7 @@ ApplicationWindow {
     Item {
         id: currentView
         state: "cloud"
-        states: [ State { name: "cloud" }, State { name: "transfer" } ]
+        states: [ State { name: "cloud" }, State { name: "transfer" }, State { name: "completed" } ]
     }
 
     // --- 目录状态管理 ---
@@ -39,15 +40,21 @@ ApplicationWindow {
         var tasks = []
         for (var i = 0; i < transferModel.count; i++) {
             var item = transferModel.get(i)
-            // 极致精简：仅保存未完成的上传任务，且只保留路径和目标目录
             if (item.type === "UP" && item.status !== "已完成") {
-                tasks.push({
-                    "p": item.localPath || "",
-                    "d": item.parentId || 0
-                })
+                tasks.push({ "p": item.localPath || "", "d": item.parentId || 0 })
             }
         }
         client.saveTasks(tasks)
+        
+        var comp = []
+        for (var j = 0; j < completedModel.count; j++) {
+            var c = completedModel.get(j)
+            comp.push({
+                "filename": c.filename, "totalSize": c.totalSize, 
+                "localPath": c.localPath, "type": c.type
+            })
+        }
+        client.saveCompletedTasks(comp)
     }
 
     Component.onDestruction: {
@@ -173,6 +180,13 @@ ApplicationWindow {
                     }
                 }
                 client.listFiles(currentParentId) 
+                
+                // 3. 已完成任务加载
+                var completedTasks = client.loadCompletedTasks()
+                completedModel.clear()
+                for (var k = 0; k < completedTasks.length; k++) {
+                    completedModel.append(completedTasks[k])
+                }
             }
         }
 
@@ -184,10 +198,23 @@ ApplicationWindow {
         }
 
         function onFileListReceived(files) {
-            fileListModel.clear()
+            var arr = []
             for (var i = 0; i < files.length; i++) {
-                var f = files[i]; f.checked = false; fileListModel.append(f)
+                var f = files[i]
+                f.checked = false
+                arr.push(f)
             }
+            fileListModel.clear()
+            fileListModel.append(arr)
+        }
+        
+        function onDirectoriesReceived(dirs) {
+            moveDialog.dirList = dirs
+            var paths = []
+            for (var i = 0; i < dirs.length; i++) {
+                paths.push(dirs[i].path)
+            }
+            moveDialog.setPaths(paths)
         }
 
         function onTransferStarted(sid, fileId, filename, totalSize, type, localPath) {
@@ -252,15 +279,34 @@ ApplicationWindow {
                     transferModel.setProperty(idx, "speed", isFinished ? 0 : speed)
                     transferModel.setProperty(idx, "eta", (isFinished || speed <= 0) ? 0 : (total - cur) / speed)
                 }
-                if (isFinished) {
+                if (isFinished && latestItem.status !== "已完成") {
                     transferModel.setProperty(idx, "status", "已完成")
                     transferModel.setProperty(idx, "speed", 0); transferModel.setProperty(idx, "eta", 0)
+                    
+                    if (latestItem.type === "DL") {
+                        completedModel.insert(0, {
+                            "filename": latestItem.filename,
+                            "totalSize": latestItem.totalSize,
+                            "localPath": latestItem.localPath,
+                            "type": latestItem.type
+                        })
+                    }
+                    
                     delete sidToIndex[sid]; saveTasks()
                 }
             }
         }
         function onRemoveResult(success, message) { if (success) client.listFiles(currentParentId); }
         function onUploadFinished() { client.listFiles(currentParentId); }
+        function onLogoutFinished() {
+            appState.state = "login"
+            transferModel.clear()
+            fileListModel.clear()
+            completedModel.clear()
+            currentParentId = 0
+            pathStack = [{"id": 0, "name": "根目录"}]
+            sidToIndex = ({})
+        }
     }
 
     // --- 界面布局 ---
@@ -298,7 +344,7 @@ ApplicationWindow {
 
                 StackLayout {
                     Layout.fillWidth: true; Layout.fillHeight: true
-                    currentIndex: currentView.state === "cloud" ? 0 : 1
+                    currentIndex: currentView.state === "cloud" ? 0 : (currentView.state === "transfer" ? 1 : 2)
 
                     CloudPage {
                         model: fileListModel
@@ -409,6 +455,19 @@ ApplicationWindow {
                             }
                         }
                     }
+
+                    CompletedPage {
+                        model: completedModel
+                        onOpenFile: (path) => client.openLocalFile(path)
+                        onOpenFolder: (path) => client.openLocalFolder(path)
+                        onDeleteFile: (index) => {
+                            var item = completedModel.get(index)
+                            if (client.deleteLocalFile(item.localPath)) {
+                                completedModel.remove(index)
+                                saveTasks()
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -461,15 +520,14 @@ ApplicationWindow {
         background: Rectangle { color: "#222"; radius: 8; border.color: "#444" }
         
         property var dirList: []
-        
-        onOpened: {
-            dirList = client.getAllDirectories()
-            var paths = []
-            for (var i = 0; i < dirList.length; i++) {
-                paths.push(dirList[i].path)
-            }
+        function setPaths(paths) {
             moveCombo.model = paths
             moveCombo.currentIndex = 0
+        }
+        
+        onOpened: {
+            moveCombo.model = ["加载中..."]
+            client.getAllDirectories()
         }
 
         contentItem: ColumnLayout {

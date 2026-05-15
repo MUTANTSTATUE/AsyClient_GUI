@@ -24,7 +24,8 @@ Rectangle {
         Repeater {
             model: [
                 { id: "cloud", icon: "☁️", label: "云盘" },
-                { id: "transfer", icon: "🔄", label: "传输" }
+                { id: "transfer", icon: "🔄", label: "传输" },
+                { id: "completed", icon: "✅", label: "已完成" }
             ]
             delegate: Rectangle {
                 Layout.fillWidth: true; Layout.preferredHeight: 45

@@ -1,5 +1,4 @@
 #include "ClientWrapper.h"
-#include <QObject>
 #include <thread>
 #include <QDebug>
 #include <QFileInfo>
@@ -9,7 +8,6 @@
 #include <QTcpSocket>
 #include <QRegularExpression>
 #include <QPointer>
-#include <QCoreApplication>
 #include <QHostAddress>
 #include <QFile>
 #include <QJsonDocument>
@@ -17,10 +15,20 @@
 #include <QJsonObject>
 #include <QStandardPaths>
 #include <QDir>
+#include <QSemaphore>
+#include <atomic>
+#include <QUrl>
+#include <QUrlQuery>
+#include <QDesktopServices>
+#ifdef _WIN32
+#include <winsock2.h>
+#else
+#include <sys/socket.h>
+#endif
 #include <nlohmann/json.hpp>
 
 ClientWrapper::ClientWrapper(QObject *parent)
-    : QObject(parent), m_client(nullptr), m_connected(false)
+    : QObject(parent), m_client(nullptr), m_connected(false), m_isDestroying(false)
 {
     m_proxyServer = new QTcpServer(this);
     connect(m_proxyServer, &QTcpServer::newConnection, this, &ClientWrapper::handleProxyConnection);
@@ -32,10 +40,31 @@ ClientWrapper::ClientWrapper(QObject *parent)
 
 ClientWrapper::~ClientWrapper()
 {
+    m_isDestroying = true;
+    for (auto state : m_streamStates) {
+        if (state) state->isDestroying = true;
+    }
+    
+    if (m_proxyServer) m_proxyServer->close();
+    
+    for (auto socket : m_proxySockets) {
+        if (socket) {
+            socket->abort();
+            socket->deleteLater();
+        }
+    }
+    m_proxySockets.clear();
+
     if (m_client) {
         m_client->Close();
         delete m_client;
     }
+}
+
+QString ClientWrapper::currentUsername() const
+{
+    if (m_client) return QString::fromStdString(m_client->GetCurrentUsername());
+    return "";
 }
 
 void ClientWrapper::connectToServer(const QString &ip, int port)
@@ -57,6 +86,7 @@ void ClientWrapper::login(const QString &user, const QString &pass)
     std::thread([this, user, pass]() {
         bool ok = m_client->Login(user.toStdString(), pass.toStdString());
         if (ok) {
+            emit currentUsernameChanged();
             emit loginResult(true, "Login Successful");
         } else {
             emit loginResult(false, "Login Failed: Check credentials or server status");
@@ -78,11 +108,35 @@ void ClientWrapper::registerUser(const QString &user, const QString &pass)
     }).detach();
 }
 
+void ClientWrapper::logout()
+{
+    if (!m_client) return;
+    
+    // Stop all transfers and connections
+    m_client->Close();
+    
+    // Re-connect to allow new login
+    std::string ip = "127.0.0.1"; // Default or cached
+    uint16_t port = 8080;
+    
+    // Re-create client
+    delete m_client;
+    m_client = new AsyCClient(ip, port);
+    if (m_client->Connect()) {
+        m_connected = true;
+    } else {
+        m_connected = false;
+    }
+    
+    emit connectedChanged();
+    emit currentUsernameChanged();
+    emit logoutFinished();
+}
+
 void ClientWrapper::listFiles(int parentId)
 {
     if (!m_client) return;
     
-    // std::thread run to not block GUI
     std::thread([this, parentId]() {
         json files = m_client->List(parentId);
         QVariantList qlist;
@@ -94,6 +148,7 @@ void ClientWrapper::listFiles(int parentId)
             map["filesize"] = f["filesize"].get<qint64>();
             map["is_dir"] = f["is_dir"].is_boolean() ? f["is_dir"].get<bool>() : (f["is_dir"].get<int>() != 0);
             map["created_at"] = QString::fromStdString(f["created_at"].get<std::string>());
+            map["checked"] = false;
             qlist.append(map);
         }
         
@@ -127,12 +182,10 @@ void ClientWrapper::download(int fileId, const QString &filename)
 {
     if (!m_client || m_client->GetCurrentUserId() == -1) return;
     
-    QString appDir = QCoreApplication::applicationDirPath();
-    QString userDir = QString("%1/usr/%2").arg(appDir).arg(m_client->GetCurrentUserId());
+    QString userDir = QString("usr/%1").arg(m_client->GetCurrentUserId());
     QDir().mkpath(userDir);
-    
     QString fullPath = userDir + "/" + filename;
-    
+
     m_client->Download(fileId, fullPath.toStdString(), [this, filename, fileId, fullPath](uint32_t sid, uint64_t cur, uint64_t total) {
         static QSet<uint32_t> startedStreams;
         if (!startedStreams.contains(sid)) {
@@ -155,8 +208,7 @@ void ClientWrapper::makeDir(int parentId, const QString &dirname)
 {
     if (!m_client) return;
     m_client->MakeDir(parentId, dirname.toStdString(), [this](bool success, std::string msg) {
-        // emit a signal or we can just let QML refresh
-        if (success) emit uploadFinished(); // uploadFinished will trigger a refresh in QML currently
+        if (success) emit uploadFinished(); 
     });
 }
 
@@ -164,56 +216,56 @@ void ClientWrapper::moveFile(int fileId, int newParentId)
 {
     if (!m_client) return;
     m_client->Move(fileId, newParentId, [this](bool success, std::string msg) {
-        if (success) emit uploadFinished(); // reuse uploadFinished to trigger refresh
+        if (success) emit uploadFinished(); 
     });
 }
 
-QVariantList ClientWrapper::getAllDirectories()
+void ClientWrapper::getAllDirectories()
 {
-    QVariantList result;
-    if (!m_client) return result;
+    if (!m_client) return;
 
-    json dirs = m_client->GetAllDirs();
-    
-    // id -> {parent_id, filename}
-    std::map<int, std::pair<int, std::string>> dirMap;
-    for (const auto& d : dirs) {
-        int id = d["id"].get<int>();
-        int parent_id = d["parent_id"].get<int>();
-        std::string filename = d["filename"].get<std::string>();
-        dirMap[id] = {parent_id, filename};
-    }
-
-    // Always add root
-    QVariantMap rootMap;
-    rootMap["id"] = 0;
-    rootMap["path"] = QString("根目录");
-    result.append(rootMap);
-
-    for (const auto& d : dirs) {
-        int id = d["id"].get<int>();
-        std::string path = d["filename"].get<std::string>();
-        int current_parent = d["parent_id"].get<int>();
+    std::thread([this]() {
+        json dirs = m_client->GetAllDirs();
+        QVariantList result;
         
-        while (current_parent != 0) {
-            auto it = dirMap.find(current_parent);
-            if (it != dirMap.end()) {
-                path = it->second.second + "/" + path;
-                current_parent = it->second.first;
-            } else {
-                break; // Should not happen if db is consistent
-            }
+        std::map<int, std::pair<int, std::string>> dirMap;
+        for (const auto& d : dirs) {
+            int id = d["id"].get<int>();
+            int parent_id = d["parent_id"].get<int>();
+            std::string filename = d["filename"].get<std::string>();
+            dirMap[id] = {parent_id, filename};
         }
-        
-        path = "根目录/" + path;
 
-        QVariantMap map;
-        map["id"] = id;
-        map["path"] = QString::fromStdString(path);
-        result.append(map);
-    }
+        QVariantMap rootMap;
+        rootMap["id"] = 0;
+        rootMap["path"] = QString("根目录");
+        result.append(rootMap);
 
-    return result;
+        for (const auto& d : dirs) {
+            int id = d["id"].get<int>();
+            std::string path = d["filename"].get<std::string>();
+            int current_parent = d["parent_id"].get<int>();
+            
+            while (current_parent != 0) {
+                auto it = dirMap.find(current_parent);
+                if (it != dirMap.end()) {
+                    path = it->second.second + "/" + path;
+                    current_parent = it->second.first;
+                } else {
+                    break; 
+                }
+            }
+            
+            path = "根目录/" + path;
+
+            QVariantMap map;
+            map["id"] = id;
+            map["path"] = QString::fromStdString(path);
+            result.append(map);
+        }
+
+        emit directoriesReceived(result);
+    }).detach();
 }
 
 QString ClientWrapper::getPreviewUrl(int fileId)
@@ -238,15 +290,13 @@ void ClientWrapper::cancelTransfer(int sid)
 
 void ClientWrapper::cancelAllTransfers()
 {
-    // Individual cancel should be used via model loop in QML
 }
 
 void ClientWrapper::saveTasks(const QVariantList &tasks)
 {
     if (!m_client || m_client->GetCurrentUserId() == -1) return;
     
-    QString appDir = QCoreApplication::applicationDirPath();
-    QString userDir = QString("%1/usr/%2").arg(appDir).arg(m_client->GetCurrentUserId());
+    QString userDir = QString("usr/%1").arg(m_client->GetCurrentUserId());
     QDir().mkpath(userDir);
 
     QJsonArray array;
@@ -270,9 +320,44 @@ QVariantList ClientWrapper::loadTasks()
     QVariantList result;
     if (!m_client || m_client->GetCurrentUserId() == -1) return result;
 
-    QString appDir = QCoreApplication::applicationDirPath();
-    QString userDir = QString("%1/usr/%2").arg(appDir).arg(m_client->GetCurrentUserId());
+    QString userDir = QString("usr/%1").arg(m_client->GetCurrentUserId());
     QFile file(userDir + "/tasks.json");
+    if (file.open(QFile::ReadOnly)) {
+        QJsonDocument doc = QJsonDocument::fromJson(file.readAll());
+        QJsonArray array = doc.array();
+        for (int i = 0; i < array.size(); i++) {
+            result.append(array[i].toObject().toVariantMap());
+        }
+        file.close();
+    }
+    return result;
+}
+
+void ClientWrapper::saveCompletedTasks(const QVariantList &tasks)
+{
+    if (!m_client || m_client->GetCurrentUserId() == -1) return;
+    QString userDir = QString("usr/%1").arg(m_client->GetCurrentUserId());
+    QDir().mkpath(userDir);
+
+    QJsonArray array;
+    for (const auto &task : tasks) {
+        array.append(QJsonObject::fromVariantMap(task.toMap()));
+    }
+    QJsonDocument doc(array);
+    QFile file(userDir + "/completed.json");
+    if (file.open(QFile::WriteOnly)) {
+        file.write(doc.toJson());
+        file.close();
+    }
+}
+
+QVariantList ClientWrapper::loadCompletedTasks()
+{
+    QVariantList result;
+    if (!m_client || m_client->GetCurrentUserId() == -1) return result;
+
+    QString userDir = QString("usr/%1").arg(m_client->GetCurrentUserId());
+    QFile file(userDir + "/completed.json");
     if (file.open(QFile::ReadOnly)) {
         QJsonDocument doc = QJsonDocument::fromJson(file.readAll());
         QJsonArray array = doc.array();
@@ -286,70 +371,88 @@ QVariantList ClientWrapper::loadTasks()
 
 void ClientWrapper::handleProxyConnection()
 {
+    if (m_isDestroying) return;
     QTcpSocket *socket = m_proxyServer->nextPendingConnection();
     if (!socket) return;
 
+    m_proxySockets.append(socket);
+    connect(socket, &QTcpSocket::disconnected, socket, &QTcpSocket::deleteLater);
+    connect(socket, &QTcpSocket::destroyed, this, [this, socket]() {
+        m_proxySockets.removeAll(socket);
+    });
+
     connect(socket, &QTcpSocket::readyRead, this, [this, socket]() {
-        if (!socket->canReadLine()) return;
+        if (m_isDestroying) return;
+        QByteArray data = socket->readAll();
+        QString request = QString::fromUtf8(data);
         
-        QString requestLine = socket->readLine();
-        QRegularExpression re("GET /preview\\?file_id=(\\d+)");
-        QRegularExpressionMatch match = re.match(requestLine);
+        if (!request.startsWith("GET")) return;
         
-        if (!match.hasMatch()) {
-            socket->close();
-            socket->deleteLater();
-            return;
-        }
+        QStringList requestParts = request.split(" ");
+        if (requestParts.size() < 2) return;
         
-        int fileId = match.captured(1).toInt();
+        QUrl url(requestParts[1]);
+        QUrlQuery query(url);
+        int fileId = query.queryItemValue("file_id").toInt();
+        
         uint64_t offset = 0;
         bool hasRange = false;
         bool hasEndOffset = false;
         uint64_t req_end_offset = 0;
         
-        // 解析 HTTP 头部，查找 Range
-        while (socket->canReadLine()) {
-            QString header = socket->readLine();
-            if (header == "\r\n") break;
-            if (header.startsWith("Range: bytes=")) {
-                hasRange = true;
-                QString rangeStr = header.mid(13).trimmed();
-                QStringList parts = rangeStr.split("-");
-                if (!parts.isEmpty() && !parts[0].isEmpty()) {
+        QStringList lines = request.split("\r\n");
+        for (const QString& line : lines) {
+            if (line.startsWith("Range: bytes=")) {
+                QString rangeVal = line.mid(13);
+                QStringList parts = rangeVal.split("-");
+                if (!parts.isEmpty()) {
                     offset = parts[0].toULongLong();
+                    hasRange = true;
+                    if (parts.size() > 1 && !parts[1].isEmpty()) {
+                        req_end_offset = parts[1].toULongLong();
+                        hasEndOffset = true;
+                    }
                 }
-                if (parts.size() > 1 && !parts[1].isEmpty()) {
-                    req_end_offset = parts[1].toULongLong();
-                    hasEndOffset = true;
-                }
+                break;
             }
-        }
-        
-        // 停止监听 read，防止冲突
-        socket->disconnect(SIGNAL(readyRead()));
-        connect(socket, &QTcpSocket::disconnected, socket, &QTcpSocket::deleteLater);
-
-        if (!m_client) {
-            socket->close();
-            return;
         }
 
         QPointer<QTcpSocket> pSocket(socket);
 
-        // Share the bytes_sent counter
-        std::shared_ptr<uint64_t> bytes_sent = std::make_shared<uint64_t>(0);
+        auto state = std::make_shared<StreamState>();
+        state->sem = new QSemaphore(0);
+        state->socketDescriptor = pSocket->socketDescriptor();
+        m_streamStates.append(state);
 
-        m_client->StreamDownload(fileId, offset, [pSocket, offset, hasRange, hasEndOffset, req_end_offset, bytes_sent, headersSent = false](const std::vector<char>& chunk, uint64_t total, const std::string& name, bool is_eof) mutable -> bool {
-            bool socketValid = false;
+        connect(pSocket.data(), &QTcpSocket::disconnected, this, [state]() {
+            state->socketValid = false;
+        });
+        connect(pSocket.data(), &QTcpSocket::destroyed, this, [this, state]() {
+            state->socketValid = false;
+            state->isDestroying = true;
+            m_streamStates.removeAll(state);
+            delete state->sem;
+            state->sem = nullptr;
+        });
+
+        auto bytes_sent = std::make_shared<uint64_t>(0);
+
+        m_client->StreamDownload(fileId, offset, [this, pSocket_raw = pSocket.data(), state, offset, hasRange, hasEndOffset, req_end_offset, bytes_sent](const std::vector<char>& chunk, uint64_t total, const std::string& name, bool is_eof) mutable -> bool {
+            if (state->isDestroying || !state->socketValid) return false;
+            
+            bool currentSocketValid = false;
             uint64_t end_offset = hasEndOffset ? qMin(req_end_offset, total - 1) : (total > 0 ? total - 1 : 0);
             uint64_t content_length = (total > 0 && end_offset >= offset) ? (end_offset - offset + 1) : 0;
             
-            if (pSocket) {
-                bool invoked = QMetaObject::invokeMethod(pSocket.data(), [&]() {
-                    if (pSocket && pSocket->state() == QAbstractSocket::ConnectedState) {
+            if (state->socketValid) {
+                bool invoked = QMetaObject::invokeMethod(this, [this, pSocket_raw, state, chunk, total, name, is_eof, content_length, bytes_sent, offset, end_offset, hasRange]() {
+                    if (state->isDestroying || !state->socketValid || !pSocket_raw || pSocket_raw->state() != QAbstractSocket::ConnectedState) {
+                        state->socketValid = false;
+                        if (state->sem) state->sem->release();
+                        return;
+                    }
                         
-                        if (!headersSent) {
+                        if (!state->headersSent) {
                             QString response;
                             if (hasRange) {
                                 response = "HTTP/1.1 206 Partial Content\r\n";
@@ -371,38 +474,48 @@ void ClientWrapper::handleProxyConnection()
                             response += "Accept-Ranges: bytes\r\n";
                             response += "Connection: close\r\n";
                             response += "\r\n";
-                            pSocket->write(response.toUtf8());
-                            headersSent = true;
+                            pSocket_raw->write(response.toUtf8());
+                            state->headersSent = true;
                         }
                         
                         if (!chunk.empty()) {
-                            // Calculate how much we can actually send
                             uint64_t remaining = content_length - *bytes_sent;
                             if (remaining > 0) {
                                 size_t send_size = qMin((uint64_t)chunk.size(), remaining);
-                                pSocket->write(chunk.data(), send_size);
+                                pSocket_raw->write(chunk.data(), send_size);
                                 *bytes_sent += send_size;
                             }
                         }
                         
-                        // If we've sent everything requested, or the file ended naturally
                         if (is_eof || *bytes_sent >= content_length) {
-                            pSocket->disconnectFromHost();
+                            pSocket_raw->disconnectFromHost();
                         }
                         
-                        socketValid = true;
+                        if (state->sem) state->sem->release();
+                }, Qt::QueuedConnection);
+                
+                if (invoked) {
+                    if (state->sem && state->sem->tryAcquire(1, 50)) {
+                        currentSocketValid = state->socketValid;
+                    } else {
+#ifdef _WIN32
+                        ::shutdown(state->socketDescriptor, SD_BOTH);
+#else
+                        ::shutdown(state->socketDescriptor, SHUT_RDWR);
+#endif
+                        state->socketValid = false;
+                        currentSocketValid = false;
                     }
-                }, Qt::BlockingQueuedConnection);
+                } else {
+                    currentSocketValid = false;
+                }
                 
-                if (!invoked) socketValid = false;
-                
-                // Tell StreamDownload to abort if we hit our requested limit
-                if (socketValid && *bytes_sent >= content_length) {
-                    socketValid = false; 
+                if (currentSocketValid && *bytes_sent >= content_length) {
+                    currentSocketValid = false; 
                 }
             }
             
-            return socketValid;
+            return currentSocketValid;
         });
 
     });
@@ -413,17 +526,32 @@ int ClientWrapper::getCurrentUserId()
     return m_client ? m_client->GetCurrentUserId() : -1;
 }
 
-QVariantList ClientWrapper::scanIncompleteDownloads(const QString &relativeDir)
+void ClientWrapper::openLocalFile(const QString &localPath)
+{
+    QFileInfo fi(localPath);
+    QDesktopServices::openUrl(QUrl::fromLocalFile(fi.absoluteFilePath()));
+}
+
+void ClientWrapper::openLocalFolder(const QString &localPath)
+{
+    QFileInfo fi(localPath);
+    QDesktopServices::openUrl(QUrl::fromLocalFile(fi.absolutePath()));
+}
+
+bool ClientWrapper::deleteLocalFile(const QString &localPath)
+{
+    return QFile::remove(localPath);
+}
+
+QVariantList ClientWrapper::scanIncompleteDownloads(const QString &dir)
 {
     QVariantList list;
-    QString fullPath = QCoreApplication::applicationDirPath() + "/" + relativeDir;
-    auto tasks = AsyCClient::ScanIncompleteDownloads(fullPath.toStdString());
+    auto tasks = AsyCClient::ScanIncompleteDownloads(dir.toStdString());
     for (const auto &t : tasks) {
         QVariantMap map;
-        map["sid"] = -1; // 还没分配 sid
+        map["sid"] = -1; 
         map["fileId"] = t.file_id;
         map["filename"] = QString::fromStdString(t.filename);
-        map["userId"] = t.user_id;
         map["username"] = QString::fromStdString(t.username);
         map["totalSize"] = (qint64)t.total_size;
         map["transferred"] = (qint64)t.current_offset;

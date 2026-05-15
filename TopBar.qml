@@ -20,12 +20,44 @@ Rectangle {
             }
         }
         
-        Item { Layout.fillWidth: true }
-        
-        Text { text: "🔔"; font.pixelSize: 18; color: "white"; opacity: 0.7 }
-        Rectangle {
-            width: 32; height: 32; radius: 16; color: "#e74c3c"
-            Text { anchors.centerIn: parent; text: "M"; color: "white" }
+        RowLayout {
+            spacing: 15
+            
+            Column {
+                Layout.alignment: Qt.AlignRight
+                Text {
+                    text: client.currentUsername
+                    color: "white"
+                    font.pixelSize: 14
+                    font.bold: true
+                    horizontalAlignment: Text.AlignRight
+                }
+                Text {
+                    id: logoutBtn
+                    text: "注销"
+                    color: "#e74c3c"
+                    font.pixelSize: 12
+                    horizontalAlignment: Text.AlignRight
+                    
+                    MouseArea {
+                        anchors.fill: parent
+                        cursorShape: Qt.PointingHandCursor
+                        onClicked: {
+                            client.logout();
+                        }
+                    }
+                }
+            }
+
+            Rectangle {
+                width: 36; height: 36; radius: 18; color: "#3498db"
+                Text { 
+                    anchors.centerIn: parent
+                    text: client.currentUsername.substring(0, 1).toUpperCase()
+                    color: "white"
+                    font.bold: true
+                }
+            }
         }
     }
 }
