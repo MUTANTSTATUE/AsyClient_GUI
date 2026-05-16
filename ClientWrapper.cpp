@@ -447,7 +447,6 @@ void ClientWrapper::handleProxyConnection()
         QPointer<QTcpSocket> pSocket(socket);
 
         auto state = std::make_shared<StreamState>();
-        state->sem = new QSemaphore(0);
         state->socketDescriptor = pSocket->socketDescriptor();
         m_streamStates.append(state);
 
@@ -458,13 +457,16 @@ void ClientWrapper::handleProxyConnection()
             state->socketValid = false;
             state->isDestroying = true;
             m_streamStates.removeAll(state);
-            delete state->sem;
-            state->sem = nullptr;
+            
+            int sid = state->streamId.load();
+            if (sid != -1 && m_client) {
+                m_client->AbortStream(sid);
+            }
         });
 
         auto bytes_sent = std::make_shared<uint64_t>(0);
-
-        m_client->StreamDownload(fileId, offset, [this, pSocket_raw = pSocket.data(), state, offset, hasRange, hasEndOffset, req_end_offset, bytes_sent](const std::vector<char>& chunk, uint64_t total, const std::string& name, bool is_eof) mutable -> bool {
+        m_client->StreamDownload(fileId, offset, [this, pSocket_raw = pSocket.data(), state, offset, hasRange, hasEndOffset, req_end_offset, bytes_sent](uint32_t sid, const std::vector<char>& chunk, uint64_t total, const std::string& name, bool is_eof) mutable -> bool {
+            state->streamId.store(sid);
             if (state->isDestroying || !state->socketValid) return false;
             
             bool currentSocketValid = false;
@@ -475,7 +477,7 @@ void ClientWrapper::handleProxyConnection()
                 bool invoked = QMetaObject::invokeMethod(this, [this, pSocket_raw, state, chunk, total, name, is_eof, content_length, bytes_sent, offset, end_offset, hasRange]() {
                     if (state->isDestroying || !state->socketValid || !pSocket_raw || pSocket_raw->state() != QAbstractSocket::ConnectedState) {
                         state->socketValid = false;
-                        if (state->sem) state->sem->release();
+                        state->sem.release();
                         return;
                     }
                         
@@ -509,8 +511,12 @@ void ClientWrapper::handleProxyConnection()
                             uint64_t remaining = content_length - *bytes_sent;
                             if (remaining > 0) {
                                 size_t send_size = qMin((uint64_t)chunk.size(), remaining);
-                                pSocket_raw->write(chunk.data(), send_size);
-                                *bytes_sent += send_size;
+                                qint64 written = pSocket_raw->write(chunk.data(), send_size);
+                                if (written == (qint64)send_size) {
+                                    *bytes_sent += written;
+                                } else {
+                                    state->socketValid = false;
+                                }
                             }
                         }
                         
@@ -518,11 +524,11 @@ void ClientWrapper::handleProxyConnection()
                             pSocket_raw->disconnectFromHost();
                         }
                         
-                        if (state->sem) state->sem->release();
+                        state->sem.release();
                 }, Qt::QueuedConnection);
                 
                 if (invoked) {
-                    if (state->sem && state->sem->tryAcquire(1, 50)) {
+                    if (state->sem.tryAcquire(1, 50)) {
                         currentSocketValid = state->socketValid;
                     } else {
 #ifdef _WIN32

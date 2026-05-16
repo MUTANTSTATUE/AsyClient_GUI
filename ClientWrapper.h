@@ -3,6 +3,7 @@
 #include <QObject>
 #include <QVariantList>
 #include <QPointer>
+#include <QSemaphore>
 #include <memory>
 #include <atomic>
 #include "AsyCClient.h"
@@ -69,10 +70,11 @@ private slots:
 
 private:
     struct StreamState {
-        class QSemaphore *sem; 
+        QSemaphore sem{0}; 
         bool headersSent{false};
         std::atomic<bool> socketValid{true};
         std::atomic<bool> isDestroying{false};
+        std::atomic<int> streamId{-1};
         qintptr socketDescriptor;
     };
 
