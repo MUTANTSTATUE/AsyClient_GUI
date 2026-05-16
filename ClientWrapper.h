@@ -30,6 +30,7 @@ public:
     Q_INVOKABLE void download(int fileId, const QString &filename);
     Q_INVOKABLE void remove(int fileId);
     Q_INVOKABLE void makeDir(int parentId, const QString &dirname);
+    Q_INVOKABLE void search(const QString &keyword);
     Q_INVOKABLE QVariantList scanIncompleteDownloads(const QString &dir);
     Q_INVOKABLE void moveFile(int fileId, int newParentId);
     Q_INVOKABLE void getAllDirectories();

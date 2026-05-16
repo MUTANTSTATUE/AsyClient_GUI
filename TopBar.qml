@@ -7,6 +7,7 @@ Rectangle {
     color: "#1a1a1a"
     
     property string placeholder: "搜索..."
+    signal searchRequested(string keyword)
 
     RowLayout {
         anchors.fill: parent
@@ -15,8 +16,9 @@ Rectangle {
         Rectangle {
             Layout.preferredWidth: 500; Layout.preferredHeight: 35; color: "#2a2a2a"; radius: 18
             TextInput {
-                anchors.fill: parent; anchors.leftMargin: 15; anchors.verticalCenter: parent.verticalCenter; color: "white"
-                Text { text: root.placeholder; color: "#666"; visible: parent.text === "" }
+                anchors.fill: parent; anchors.leftMargin: 15; verticalAlignment: TextInput.AlignVCenter; color: "white"
+                Text { anchors.fill: parent; text: root.placeholder; color: "#666"; visible: parent.text === ""; verticalAlignment: Text.AlignVCenter }
+                onAccepted: root.searchRequested(text)
             }
         }
         

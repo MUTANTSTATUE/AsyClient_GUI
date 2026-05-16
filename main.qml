@@ -34,6 +34,8 @@ ApplicationWindow {
     property int currentParentId: 0
     property var sidToIndex: ({}) // 移动到这里：根层级
     property var pathStack: [{"id": 0, "name": "根目录"}]
+    property bool isSearching: false
+    property string searchKeyword: ""
 
     // --- 持久化计时器 ---
     function saveTasks() {
@@ -338,8 +340,20 @@ ApplicationWindow {
             ColumnLayout {
                 Layout.fillWidth: true; Layout.fillHeight: true; spacing: 0
                 TopBar {
+                    id: topBar
                     Layout.fillWidth: true
                     placeholder: "搜索" + (currentView.state === "cloud" ? "云盘" : "传输") + "..."
+                    onSearchRequested: (keyword) => {
+                        if (keyword.trim() === "") {
+                            isSearching = false
+                            client.listFiles(currentParentId)
+                        } else {
+                            isSearching = true
+                            searchKeyword = keyword
+                            client.search(keyword)
+                            currentView.state = "cloud"
+                        }
+                    }
                 }
 
                 StackLayout {
@@ -350,8 +364,10 @@ ApplicationWindow {
                         model: fileListModel
                         selectedCount: window.selectedCount()
                         pathStack: window.pathStack
+                        isSearching: window.isSearching
+                        searchKeyword: window.searchKeyword
                         onUploadClicked: fileDialog.open()
-                        onRefreshClicked: client.listFiles(currentParentId)
+                        onRefreshClicked: isSearching ? client.search(searchKeyword) : client.listFiles(currentParentId)
                         onMakeDirClicked: makeDirDialog.open()
                         onMoveClicked: {
                             // Populate move list, just simple "Root" for now as example or parent
@@ -399,6 +415,7 @@ ApplicationWindow {
                             }
                         }
                         onEnterDirectory: (id, name) => {
+                            window.isSearching = false
                             var newStack = window.pathStack.slice();
                             newStack.push({"id": id, "name": name});
                             window.pathStack = newStack;
@@ -406,10 +423,15 @@ ApplicationWindow {
                             client.listFiles(id);
                         }
                         onNavigateBreadcrumb: (index) => {
+                            window.isSearching = false
                             var newStack = window.pathStack.slice(0, index + 1);
                             window.pathStack = newStack;
                             window.currentParentId = newStack[newStack.length - 1].id;
                             client.listFiles(window.currentParentId);
+                        }
+                        onCloseSearch: {
+                            window.isSearching = false
+                            client.listFiles(window.currentParentId)
                         }
                     }
 

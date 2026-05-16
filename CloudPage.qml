@@ -10,6 +10,8 @@ ColumnLayout {
     property var model
     property int selectedCount: 0
     property var pathStack: [{"id": 0, "name": "根目录"}]
+    property bool isSearching: false
+    property string searchKeyword: ""
     
     signal uploadClicked()
     signal refreshClicked()
@@ -20,6 +22,7 @@ ColumnLayout {
     signal moveClicked()
     signal enterDirectory(int id, string name)
     signal navigateBreadcrumb(int index)
+    signal closeSearch()
 
     // 工具栏
     Rectangle {
@@ -75,18 +78,38 @@ ColumnLayout {
     Rectangle {
         Layout.fillWidth: true; Layout.preferredHeight: 30; color: "#1e1e1e"
         RowLayout {
-            anchors.fill: parent; anchors.leftMargin: 20; spacing: 5
-            Repeater {
-                model: root.pathStack
-                delegate: RowLayout {
-                    spacing: 5
-                    Text { 
-                        text: modelData.name; color: "#3498db"; font.pixelSize: 14; font.bold: true
-                        MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: root.navigateBreadcrumb(index) }
+            anchors.left: parent.left; anchors.top: parent.top; anchors.bottom: parent.bottom; anchors.right: parent.right
+            anchors.leftMargin: 20; spacing: 8
+            
+            // 正常面包屑
+            RowLayout {
+                spacing: 8; visible: !root.isSearching
+                Repeater {
+                    model: root.pathStack
+                    delegate: RowLayout {
+                        spacing: 8
+                        Text { 
+                            text: modelData.name; color: "#3498db"; font.pixelSize: 14; font.bold: true
+                            MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: root.navigateBreadcrumb(index) }
+                        }
+                        Text { text: "/"; color: "#444"; font.pixelSize: 14; visible: index < root.pathStack.length - 1 }
                     }
-                    Text { text: ">"; color: "#888"; visible: index < root.pathStack.length - 1 }
                 }
             }
+            
+            // 搜索状态展示
+            RowLayout {
+                spacing: 15; visible: root.isSearching
+                Text { text: "🔍 搜索结果: "; color: "#888"; font.pixelSize: 13 }
+                Text { text: "\"" + root.searchKeyword + "\""; color: "white"; font.pixelSize: 14; font.bold: true }
+                Rectangle { width: 1; height: 12; color: "#444" }
+                Text { 
+                    text: "返回原目录"; color: "#3498db"; font.pixelSize: 13; font.underline: true
+                    MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: root.closeSearch() }
+                }
+            }
+            
+            Item { Layout.fillWidth: true }
         }
     }
 

@@ -74,6 +74,11 @@ void ClientWrapper::connectToServer(const QString &ip, int port)
     
     if (m_client->Connect()) {
         m_connected = true;
+        
+        m_client->SetOnKicked([this]() {
+            emit loginResult(false, "您的账号在其他设备登录，已被强制下线。");
+        });
+
         emit connectedChanged();
         qDebug() << "Connected to server";
     }
@@ -210,6 +215,28 @@ void ClientWrapper::makeDir(int parentId, const QString &dirname)
     m_client->MakeDir(parentId, dirname.toStdString(), [this](bool success, std::string msg) {
         if (success) emit uploadFinished(); 
     });
+}
+
+void ClientWrapper::search(const QString &keyword)
+{
+    if (!m_client) return;
+
+    std::thread([this, keyword]() {
+        json files = m_client->Search(keyword.toStdString());
+        QVariantList qlist;
+        for (const auto& f : files) {
+            QVariantMap map;
+            map["id"] = f["id"].get<int>();
+            map["filename"] = QString::fromStdString(f["filename"].get<std::string>());
+            map["filesize"] = f["filesize"].get<qint64>();
+            map["is_dir"] = f["is_dir"].is_boolean() ? f["is_dir"].get<bool>() : (f["is_dir"].get<int>() != 0);
+            map["created_at"] = QString::fromStdString(f["created_at"].get<std::string>());
+            map["checked"] = false;
+            qlist.append(map);
+        }
+        
+        emit fileListReceived(qlist);
+    }).detach();
 }
 
 void ClientWrapper::moveFile(int fileId, int newParentId)
